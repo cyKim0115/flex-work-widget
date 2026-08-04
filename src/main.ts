@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 
 type WorkPhase = "NeedLogin" | "NotStarted" | "Working" | "Resting" | "Done" | "FetchError";
 
@@ -11,6 +12,9 @@ type WorkSnapshot = {
   error: string | null;
   fetchedAtMs: number | null;
 };
+
+const COMPACT = { width: 280, height: 128 };
+const MESSAGE = { width: 420, height: 260 };
 
 function $(id: string): HTMLElement {
   const el = document.getElementById(id);
@@ -60,6 +64,16 @@ function phaseBadgeText(state: WorkPhase): string {
   }
 }
 
+function tidyMessage(raw: string): string {
+  return raw
+    .replace(/\r\n/g, "\n")
+    .replace(/\nLocation:\s*\n\s*rookie-rs[\s\S]*$/gim, "")
+    .replace(/chrome:\s*decrypt_encrypted_value failed/gi, "Chrome 쿠키 복호화 실패")
+    .replace(/edge:\s*decrypt_encrypted_value failed/gi, "Edge 쿠키 복호화 실패")
+    .replace(/can be decrypted only when running as admin[^\n]*/gi, "관리자 권한(UAC) 필요")
+    .trim();
+}
+
 let latest: WorkSnapshot = {
   state: "NeedLogin",
   workedSeconds: null,
@@ -70,6 +84,36 @@ let latest: WorkSnapshot = {
 };
 
 let tickHandle: number | null = null;
+let msgResolver: (() => void) | null = null;
+
+async function setWidgetSize(size: { width: number; height: number }) {
+  try {
+    await getCurrentWindow().setSize(new LogicalSize(size.width, size.height));
+  } catch {
+    /* ignore */
+  }
+}
+
+function hideMessage() {
+  $("msg-backdrop").classList.add("hidden");
+  void setWidgetSize(COMPACT);
+  if (msgResolver) {
+    const done = msgResolver;
+    msgResolver = null;
+    done();
+  }
+}
+
+async function showMessage(title: string, body: string): Promise<void> {
+  hideContextMenu();
+  $("msg-title").textContent = title;
+  $("msg-body").textContent = tidyMessage(body);
+  await setWidgetSize(MESSAGE);
+  $("msg-backdrop").classList.remove("hidden");
+  return new Promise((resolve) => {
+    msgResolver = resolve;
+  });
+}
 
 function liveWorkedSeconds(snap: WorkSnapshot): number | null {
   if (snap.workedSeconds == null) return null;
@@ -163,6 +207,7 @@ async function boot() {
 
   window.addEventListener("contextmenu", (event) => {
     event.preventDefault();
+    if (!$("msg-backdrop").classList.contains("hidden")) return;
     showContextMenu(event.clientX, event.clientY);
   });
 
@@ -174,11 +219,29 @@ async function boot() {
     event.stopPropagation();
   });
 
-  window.addEventListener("blur", hideContextMenu);
-  window.addEventListener("resize", hideContextMenu);
-  window.addEventListener("click", hideContextMenu);
+  $("msg-ok").addEventListener("click", (event) => {
+    event.stopPropagation();
+    hideMessage();
+  });
+
+  $("msg-backdrop").addEventListener("pointerdown", (event) => {
+    if (event.target === $("msg-backdrop")) hideMessage();
+  });
+
+  window.addEventListener("blur", () => {
+    if ($("msg-backdrop").classList.contains("hidden")) hideContextMenu();
+  });
+  window.addEventListener("resize", () => {
+    if ($("msg-backdrop").classList.contains("hidden")) hideContextMenu();
+  });
+  window.addEventListener("click", () => {
+    if ($("msg-backdrop").classList.contains("hidden")) hideContextMenu();
+  });
   window.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") hideContextMenu();
+    if (event.key === "Escape") {
+      if (!$("msg-backdrop").classList.contains("hidden")) hideMessage();
+      else hideContextMenu();
+    }
   });
 
   $("menu-login-system").addEventListener("click", async (event) => {
@@ -187,7 +250,7 @@ async function boot() {
     try {
       await invoke("open_login_system");
     } catch (e) {
-      window.alert(String(e));
+      await showMessage("오류", String(e));
     }
   });
 
@@ -195,16 +258,20 @@ async function boot() {
     event.stopPropagation();
     hideContextMenu();
     try {
-      window.alert(
-        "Chrome/Edge 쿠키를 읽기 위해 관리자 권한(UAC) 확인이 뜹니다.\n허용한 뒤 flex 근무시간이 갱신됩니다.",
+      await showMessage(
+        "세션 가져오기",
+        "Chrome/Edge 쿠키를 읽기 위해 관리자 권한(UAC) 확인이 뜹니다.\n허용한 뒤 근무시간이 갱신됩니다.",
       );
       const snap = await invoke<WorkSnapshot>("harvest_browser_session");
       await applySnap(snap);
       if (snap.state === "NeedLogin" || snap.state === "FetchError") {
-        window.alert(snap.error || snap.label || "세션 가져오기 실패");
+        await showMessage(
+          "세션 가져오기 실패",
+          `${snap.error || snap.label || "실패"}\n\n대안: Cookie 붙여넣기 메뉴를 사용하세요.`,
+        );
       }
     } catch (e) {
-      window.alert(String(e));
+      await showMessage("오류", String(e));
     }
   });
 
@@ -212,7 +279,7 @@ async function boot() {
     event.stopPropagation();
     hideContextMenu();
     const cookie = window.prompt(
-      "Chrome DevTools → Network → flex.team 요청 → Request Headers의 Cookie 값을 붙여넣으세요.\n(AID / V2_WS_AID 포함)",
+      "Chrome DevTools → Network → flex.team 요청 → Cookie 헤더를 붙여넣으세요.",
     );
     if (!cookie || !cookie.trim()) return;
     try {
@@ -221,10 +288,10 @@ async function boot() {
       });
       await applySnap(snap);
       if (snap.state === "NeedLogin" || snap.state === "FetchError") {
-        window.alert(snap.error || snap.label || "Cookie 가져오기 실패");
+        await showMessage("Cookie 가져오기 실패", snap.error || snap.label || "실패");
       }
     } catch (e) {
-      window.alert(String(e));
+      await showMessage("오류", String(e));
     }
   });
 

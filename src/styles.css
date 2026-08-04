@@ -195,3 +195,70 @@ body {
 .menu-item.danger {
   color: var(--danger);
 }
+
+.msg-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.msg-backdrop.hidden {
+  display: none;
+}
+
+.msg-card {
+  width: 100%;
+  max-width: 400px;
+  max-height: calc(100% - 8px);
+  overflow: auto;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--menu-bg);
+  color: var(--fg);
+  box-shadow: var(--shadow);
+  padding: 12px 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.msg-title {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.msg-body {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  user-select: text;
+  cursor: text;
+}
+
+.msg-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.msg-btn {
+  border: 0;
+  border-radius: 8px;
+  padding: 7px 12px;
+  background: var(--menu-hover);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.msg-btn:hover {
+  filter: brightness(1.05);
+}
