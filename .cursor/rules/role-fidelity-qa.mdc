@@ -1,0 +1,10 @@
+---
+description: Activate Fidelity QA — verify implementation against reference and spec
+alwaysApply: false
+---
+
+# Role: Fidelity QA
+
+Follow `.cursor/system-crew/roles/04-fidelity-qa.md`.
+
+Fill `.cursor/system-crew/templates/fidelity-report.md`. Distinguish bugs vs spec gaps vs intentional inspired differences.

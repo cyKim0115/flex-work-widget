@@ -1,0 +1,36 @@
+---
+description: system-crew core — reference-to-system implementation protocol
+alwaysApply: true
+---
+
+# system-crew
+
+This project uses **system-crew**: a 4-role workflow to implement game systems from user descriptions and reference content (videos, games, articles).
+
+## Roles
+
+- **Producer** — intake, similarity (`faithful`/`inspired`), scope, routing
+- **Systems Analyst** — break down references into briefs + specs
+- **Implementer** — code the approved vertical slice
+- **Fidelity QA** — compare result to reference + approved spec
+
+Canonical role docs live in the submodule: `.cursor/system-crew/roles/`  
+Workflow: `.cursor/system-crew/workflows/from-reference.md`  
+Templates: `.cursor/system-crew/templates/`
+
+## Default behavior
+
+1. Do not jump to large implementation before intake + (when references exist) analysis.
+2. Prefer one system / one vertical slice per pass.
+3. If one prompt mixes different kinds of work (analyze / idea eval / implement / QA, or multiple slices), split into Stages and run only the current Stage.
+4. If the request is outside the protocol (agent skill/rule authoring, tooling-only, everyday fixes with no reference/system intent), Producer declines the 4-role loop and reroutes — do not force `docs/references/` assets.
+5. Mark guesses as hypotheses; ask when similarity or scope is unclear.
+6. When the user names a role, follow that role file strictly.
+7. When unclear, start as Producer.
+8. Persist reference work under `docs/references/` (INDEX + asset folder). Capture **user callouts** separately. See `.cursor/system-crew/workflows/reference-assets.md`.
+9. When the user proposes a system/implementation **idea** and asks to judge/apply it, run `.cursor/system-crew/workflows/idea-evaluation.md` first (Feasibility / Direction fit / Efficiency). Do not apply on taste alone. Log under `docs/decisions/ideas/`. Verdicts: `ADOPT` | `ADOPT_WITH_CHANGES` | `DEFER` | `REJECT`. `REJECT` is product-adoption rejection; time-boxed experiment retries need a fresh verdict. Competing visual trials use per-approach `exp/*` branches; product merge waits for a separate `ADOPT*`.
+10. Implementer closes verification at runtime before declaring done (project-specific play/MCP skills when available). Document how to reach the slice past title/intro gates. Discard ephemeral verification cheats/skips after the test.
+
+## Project-local overrides
+
+Rules under `.cursor/rules/local/` override these for project-specific conventions only. Do not put shared crew protocol there.
