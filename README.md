@@ -24,13 +24,17 @@ flex 웹 구조가 바뀌면 깨질 수 있습니다.
 
 ## 실행
 
+일상 사용: `시작.bat`  
+→ 릴리즈 exe를 `%LOCALAPPDATA%\FlexWorkWidget\`에 두고 실행합니다. 커맨드창은 남지 않습니다.  
+→ 처음 한 번은 빌드가 필요할 수 있습니다 (`npm run build:app`).
+
+개발(핫 리로드): `시작-개발.bat` 또는
+
 ```powershell
 cd C:\Users\cykim\repo\flex-work-widget
 npm install
 npm run tauri dev
 ```
-
-또는 `시작.bat`
 
 ### 첫 연결
 
@@ -39,7 +43,9 @@ npm run tauri dev
 1. 위젯 우클릭 → **1. 브라우저에서 로그인** (Chrome/Edge)
 2. flex 홈까지 로그인 완료
 3. 위젯 우클릭 → **2. 세션 가져오기**  
+   - Chrome/Edge **모든 프로필**을 최근 사용 순으로 스캔합니다
    - Chrome v130+ 쿠키 암호 때문에 **관리자 권한(UAC)** 확인이 뜹니다 → 허용
+   - Chrome만 로그인돼 있고 복호화가 막히면 Edge 로그인 또는 Cookie 붙여넣기를 쓰세요
 4. 안 되면 **Cookie 붙여넣기…**  
    - DevTools → Network → flex.team 요청 → `Cookie` 헤더 복사/붙여넣기
 

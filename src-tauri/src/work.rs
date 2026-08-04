@@ -345,7 +345,7 @@ fn compute_from_packs(packs: &[WorkClockPack]) -> WorkSnapshot {
             }
         }
 
-        // Subtract rests
+        // Subtract rests (PLAN_BY_AUTO may have future stop times)
         for rest in &pack.rest_records {
             let Some(rs) = rest.rest_start_record.as_ref().and_then(event_ms) else {
                 continue;
@@ -355,7 +355,7 @@ fn compute_from_packs(packs: &[WorkClockPack]) -> WorkSnapshot {
                 .as_ref()
                 .and_then(event_ms)
                 .unwrap_or(if ongoing { end_cap } else { end });
-            if ongoing && rest.rest_stop_record.is_none() {
+            if ongoing && rs <= end_cap && end_cap < re {
                 any_resting = true;
             }
             let a = rs.max(start);
@@ -422,8 +422,27 @@ fn compute_from_packs(packs: &[WorkClockPack]) -> WorkSnapshot {
     }
 }
 
-fn parse_status_value(val: &serde_json::Value) -> WorkSnapshot {
-    // Prefer known field, else deep-find workClockRecordPacks
+fn packs_from_status_value(val: &serde_json::Value) -> Vec<WorkClockPack> {
+    // Current Flex API: onGoingRecordPack (singular object).
+    // Older / alternate shapes: workClockRecordPacks (array).
+    if let Some(pack) = val
+        .get("onGoingRecordPack")
+        .or_else(|| val.get("on_going_record_pack"))
+    {
+        if pack.is_null() {
+            // Explicit null → not clocked in
+            return Vec::new();
+        }
+        if let Ok(mut parsed) = serde_json::from_value::<WorkClockPack>(pack.clone()) {
+            if parsed.applied_date.is_none() {
+                if let Some(d) = val.get("targetDate").and_then(|v| v.as_str()) {
+                    parsed.applied_date = Some(d.to_string());
+                }
+            }
+            return vec![parsed];
+        }
+    }
+
     let packs_val = val
         .get("workClockRecordPacks")
         .or_else(|| val.get("work_clock_record_packs"))
@@ -434,6 +453,9 @@ fn parse_status_value(val: &serde_json::Value) -> WorkSnapshot {
                     serde_json::Value::Object(map) => {
                         if let Some(p) = map.get("workClockRecordPacks") {
                             return Some(p.clone());
+                        }
+                        if let Some(p) = map.get("onGoingRecordPack") {
+                            return Some(serde_json::Value::Array(vec![p.clone()]));
                         }
                         for child in map.values() {
                             if let Some(p) = find(child) {
@@ -456,15 +478,28 @@ fn parse_status_value(val: &serde_json::Value) -> WorkSnapshot {
             find(val)
         });
 
-    let Some(packs_val) = packs_val else {
-        // Maybe empty object means not started
-        if val.as_object().map(|o| o.is_empty()).unwrap_or(false) {
-            return need_not_started();
-        }
-        // Try deserialize whole as CurrentStatusResponse
-        if let Ok(parsed) = serde_json::from_value::<CurrentStatusResponse>(val.clone()) {
-            return compute_from_packs(&parsed.work_clock_record_packs);
-        }
+    if let Some(packs_val) = packs_val {
+        return serde_json::from_value(packs_val).unwrap_or_default();
+    }
+
+    if let Ok(parsed) = serde_json::from_value::<CurrentStatusResponse>(val.clone()) {
+        return parsed.work_clock_record_packs;
+    }
+
+    Vec::new()
+}
+
+fn parse_status_value(val: &serde_json::Value) -> WorkSnapshot {
+    if val.as_object().map(|o| o.is_empty()).unwrap_or(false) {
+        return need_not_started();
+    }
+
+    let packs = packs_from_status_value(val);
+    if packs.is_empty()
+        && val.get("onGoingRecordPack").is_none()
+        && val.get("workClockRecordPacks").is_none()
+        && val.get("targetDate").is_none()
+    {
         return WorkSnapshot {
             state: "FetchError".into(),
             worked_seconds: None,
@@ -473,9 +508,8 @@ fn parse_status_value(val: &serde_json::Value) -> WorkSnapshot {
             error: Some("unexpected current-status payload".into()),
             fetched_at_ms: Some(now_ms()),
         };
-    };
+    }
 
-    let packs: Vec<WorkClockPack> = serde_json::from_value(packs_val).unwrap_or_default();
     compute_from_packs(&packs)
 }
 
@@ -587,5 +621,63 @@ pub fn tokens_from_parts(aid: String, ws_aid: String, ws_rid: String) -> Session
         ws_rid,
         user_id_hash: None,
         updated_at_ms: Some(now_ms()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_ongoing_record_pack() {
+        let raw = r#"{
+            "targetDate": "2026-08-04",
+            "onGoingRecordPack": {
+                "startRecord": {
+                    "eventType": "START",
+                    "targetTime": 1785802980000,
+                    "realTime": 1785802980000,
+                    "recordType": "RECORD",
+                    "zoneId": "Asia/Seoul"
+                },
+                "switchRecords": [],
+                "restRecords": [{
+                    "restStartRecord": {
+                        "eventType": "REST_START",
+                        "targetTime": 1785816000000,
+                        "recordType": "PLAN_BY_AUTO",
+                        "zoneId": "Asia/Seoul"
+                    },
+                    "restStopRecord": {
+                        "eventType": "REST_STOP",
+                        "targetTime": 1785819600000,
+                        "recordType": "PLAN_BY_AUTO",
+                        "zoneId": "Asia/Seoul"
+                    }
+                }],
+                "onGoing": true
+            }
+        }"#;
+        let val: serde_json::Value = serde_json::from_str(raw).unwrap();
+        let snap = parse_status_value(&val);
+        assert!(
+            snap.state == "Working" || snap.state == "Resting",
+            "expected Working/Resting, got {} ({:?})",
+            snap.state,
+            snap.error
+        );
+        assert!(snap.worked_seconds.unwrap_or(0) > 0);
+    }
+
+    #[test]
+    fn null_ongoing_means_not_started() {
+        let raw = r#"{
+            "targetDate": "2026-08-04",
+            "onGoingRecordPack": null,
+            "targetDayWorkSchedule": { "date": "2026-08-04", "workRecords": [], "timeOffs": [] }
+        }"#;
+        let val: serde_json::Value = serde_json::from_str(raw).unwrap();
+        let snap = parse_status_value(&val);
+        assert_eq!(snap.state, "NotStarted");
     }
 }
