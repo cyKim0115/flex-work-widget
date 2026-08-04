@@ -104,9 +104,9 @@ function render(snap: WorkSnapshot) {
   const now = new Date();
   const hhmm = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   if (snap.state === "NeedLogin") {
-    status.textContent = "우클릭 → 앱에서 로그인";
+    status.textContent = "우클릭 → 브라우저 로그인 → 세션 가져오기";
   } else if (snap.state === "FetchError") {
-    status.textContent = snap.error ? `갱신 실패 · ${hhmm}` : `갱신 실패 · ${hhmm}`;
+    status.textContent = `갱신 실패 · ${hhmm}`;
   } else {
     status.textContent = `updated ${hhmm}`;
   }
@@ -136,22 +136,25 @@ function showContextMenu(x: number, y: number) {
   menu.style.top = `${Math.min(y, maxY)}px`;
 }
 
+async function applySnap(snap: WorkSnapshot) {
+  latest = snap;
+  render(snap);
+  ensureTicker();
+}
+
 async function refresh() {
   try {
     const snap = await invoke<WorkSnapshot>("get_work");
-    latest = snap;
-    render(snap);
-    ensureTicker();
+    await applySnap(snap);
   } catch (e) {
-    latest = {
+    await applySnap({
       state: "FetchError",
       workedSeconds: null,
       label: "갱신 실패",
       startedAt: null,
       error: String(e),
       fetchedAtMs: Date.now(),
-    };
-    render(latest);
+    });
   }
 }
 
@@ -183,19 +186,6 @@ async function boot() {
     hideContextMenu();
     try {
       await invoke("open_login_system");
-      window.alert(
-        "시스템 브라우저에서 flex에 로그인한 뒤,\n위젯 메뉴 →「앱에서 로그인」으로 같은 계정 세션을 연결하거나,\n앱 로그인 창에서 이메일로 로그인해 주세요.\n\n(Google 로그인은 앱 내 브라우저에서 하얀 화면이 날 수 있습니다.)",
-      );
-    } catch (e) {
-      window.alert(String(e));
-    }
-  });
-
-  $("menu-login").addEventListener("click", async (event) => {
-    event.stopPropagation();
-    hideContextMenu();
-    try {
-      await invoke("open_login");
     } catch (e) {
       window.alert(String(e));
     }
@@ -205,10 +195,34 @@ async function boot() {
     event.stopPropagation();
     hideContextMenu();
     try {
-      const snap = await invoke<WorkSnapshot>("harvest_login_cookies");
-      latest = snap;
-      render(snap);
-      ensureTicker();
+      window.alert(
+        "Chrome/Edge 쿠키를 읽기 위해 관리자 권한(UAC) 확인이 뜹니다.\n허용한 뒤 flex 근무시간이 갱신됩니다.",
+      );
+      const snap = await invoke<WorkSnapshot>("harvest_browser_session");
+      await applySnap(snap);
+      if (snap.state === "NeedLogin" || snap.state === "FetchError") {
+        window.alert(snap.error || snap.label || "세션 가져오기 실패");
+      }
+    } catch (e) {
+      window.alert(String(e));
+    }
+  });
+
+  $("menu-paste").addEventListener("click", async (event) => {
+    event.stopPropagation();
+    hideContextMenu();
+    const cookie = window.prompt(
+      "Chrome DevTools → Network → flex.team 요청 → Request Headers의 Cookie 값을 붙여넣으세요.\n(AID / V2_WS_AID 포함)",
+    );
+    if (!cookie || !cookie.trim()) return;
+    try {
+      const snap = await invoke<WorkSnapshot>("import_cookie_header", {
+        cookieHeader: cookie.trim(),
+      });
+      await applySnap(snap);
+      if (snap.state === "NeedLogin" || snap.state === "FetchError") {
+        window.alert(snap.error || snap.label || "Cookie 가져오기 실패");
+      }
     } catch (e) {
       window.alert(String(e));
     }
@@ -233,9 +247,7 @@ async function boot() {
   });
 
   await listen<WorkSnapshot>("work-updated", (event) => {
-    latest = event.payload;
-    render(latest);
-    ensureTicker();
+    void applySnap(event.payload);
   });
 
   await refresh();
