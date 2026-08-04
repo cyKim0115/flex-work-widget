@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 
 type WorkPhase = "NeedLogin" | "NotStarted" | "Working" | "Resting" | "Done" | "FetchError";
+type DisplayMode = "worked" | "remaining";
 
 type WorkSnapshot = {
   state: WorkPhase;
@@ -15,6 +16,8 @@ type WorkSnapshot = {
 
 const COMPACT = { width: 280, height: 128 };
 const MESSAGE = { width: 420, height: 260 };
+const TARGET_WORK_SECONDS = 8 * 60 * 60;
+const MODE_KEY = "flex-work-display-mode";
 
 function $(id: string): HTMLElement {
   const el = document.getElementById(id);
@@ -74,6 +77,15 @@ function tidyMessage(raw: string): string {
     .trim();
 }
 
+function loadMode(): DisplayMode {
+  const raw = localStorage.getItem(MODE_KEY);
+  return raw === "remaining" ? "remaining" : "worked";
+}
+
+function saveMode(mode: DisplayMode) {
+  localStorage.setItem(MODE_KEY, mode);
+}
+
 let latest: WorkSnapshot = {
   state: "NeedLogin",
   workedSeconds: null,
@@ -83,6 +95,7 @@ let latest: WorkSnapshot = {
   fetchedAtMs: null,
 };
 
+let displayMode: DisplayMode = loadMode();
 let tickHandle: number | null = null;
 let msgResolver: (() => void) | null = null;
 
@@ -124,6 +137,34 @@ function liveWorkedSeconds(snap: WorkSnapshot): number | null {
   return snap.workedSeconds + Math.max(0, elapsed);
 }
 
+function displaySeconds(worked: number | null): number | null {
+  if (worked == null) return null;
+  if (displayMode === "remaining") {
+    return Math.max(0, TARGET_WORK_SECONDS - worked);
+  }
+  return worked;
+}
+
+function modeSubtitle(snap: WorkSnapshot): string {
+  if (displayMode === "remaining") {
+    if (snap.startedAt) return `남은 근무시간 · 출근 ${snap.startedAt}`;
+    return "남은 근무시간 (8시간 기준)";
+  }
+  return snap.label || "오늘 누적 근무시간";
+}
+
+function syncModeMenu() {
+  $("menu-mode-worked").classList.toggle("checked", displayMode === "worked");
+  $("menu-mode-remaining").classList.toggle("checked", displayMode === "remaining");
+}
+
+function setDisplayMode(mode: DisplayMode) {
+  displayMode = mode;
+  saveMode(mode);
+  syncModeMenu();
+  render(latest);
+}
+
 function render(snap: WorkSnapshot) {
   const widget = document.querySelector(".widget") as HTMLElement;
   widget.classList.toggle("error", snap.state === "FetchError" || snap.state === "NeedLogin");
@@ -132,13 +173,15 @@ function render(snap: WorkSnapshot) {
   badge.className = `badge ${phaseBadgeClass(snap.state)}`;
   badge.textContent = phaseBadgeText(snap.state);
 
-  const seconds = liveWorkedSeconds(snap);
+  const worked = liveWorkedSeconds(snap);
   if (snap.state === "NotStarted") {
-    $("time").textContent = "00:00:00";
-    $("subtitle").textContent = "아직 출근하지 않았습니다";
-  } else if (seconds != null) {
+    const seconds = displayMode === "remaining" ? TARGET_WORK_SECONDS : 0;
     $("time").textContent = formatHms(seconds);
-    $("subtitle").textContent = snap.label || "오늘 누적 근무시간";
+    $("subtitle").textContent =
+      displayMode === "remaining" ? "남은 근무시간 (8시간 기준)" : "아직 출근하지 않았습니다";
+  } else if (worked != null) {
+    $("time").textContent = formatHms(displaySeconds(worked) ?? 0);
+    $("subtitle").textContent = modeSubtitle(snap);
   } else {
     $("time").textContent = "——:——";
     $("subtitle").textContent = snap.label || snap.error || "—";
@@ -152,7 +195,8 @@ function render(snap: WorkSnapshot) {
   } else if (snap.state === "FetchError") {
     status.textContent = `갱신 실패 · ${hhmm}`;
   } else {
-    status.textContent = `updated ${hhmm}`;
+    const modeHint = displayMode === "remaining" ? "남은" : "누적";
+    status.textContent = `${modeHint} · updated ${hhmm}`;
   }
 }
 
@@ -169,6 +213,7 @@ function hideContextMenu() {
 }
 
 function showContextMenu(x: number, y: number) {
+  syncModeMenu();
   const backdrop = $("context-backdrop");
   const menu = $("context-menu");
   backdrop.classList.remove("hidden");
@@ -204,6 +249,7 @@ async function refresh() {
 
 async function boot() {
   const backdrop = $("context-backdrop");
+  syncModeMenu();
 
   window.addEventListener("contextmenu", (event) => {
     event.preventDefault();
@@ -226,6 +272,15 @@ async function boot() {
 
   $("msg-backdrop").addEventListener("pointerdown", (event) => {
     if (event.target === $("msg-backdrop")) hideMessage();
+  });
+
+  // Click time area to toggle display mode
+  const timeEl = $("time");
+  timeEl.title = "클릭: 누적 ↔ 남은 근무시간";
+  timeEl.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (!$("msg-backdrop").classList.contains("hidden")) return;
+    setDisplayMode(displayMode === "worked" ? "remaining" : "worked");
   });
 
   window.addEventListener("blur", () => {
@@ -267,7 +322,7 @@ async function boot() {
       if (snap.state === "NeedLogin" || snap.state === "FetchError") {
         await showMessage(
           "세션 가져오기 실패",
-          `${snap.error || snap.label || "실패"}\n\n대안: Cookie 붙여넣기 메뉴를 사용하세요.`,
+          `${snap.error || snap.label || "실패"}\n\nEdge에서 flex.team에 로그인한 뒤 다시 시도하세요.`,
         );
       }
     } catch (e) {
@@ -275,24 +330,16 @@ async function boot() {
     }
   });
 
-  $("menu-paste").addEventListener("click", async (event) => {
+  $("menu-mode-worked").addEventListener("click", (event) => {
     event.stopPropagation();
     hideContextMenu();
-    const cookie = window.prompt(
-      "Chrome DevTools → Network → flex.team 요청 → Cookie 헤더를 붙여넣으세요.",
-    );
-    if (!cookie || !cookie.trim()) return;
-    try {
-      const snap = await invoke<WorkSnapshot>("import_cookie_header", {
-        cookieHeader: cookie.trim(),
-      });
-      await applySnap(snap);
-      if (snap.state === "NeedLogin" || snap.state === "FetchError") {
-        await showMessage("Cookie 가져오기 실패", snap.error || snap.label || "실패");
-      }
-    } catch (e) {
-      await showMessage("오류", String(e));
-    }
+    setDisplayMode("worked");
+  });
+
+  $("menu-mode-remaining").addEventListener("click", (event) => {
+    event.stopPropagation();
+    hideContextMenu();
+    setDisplayMode("remaining");
   });
 
   $("menu-refresh").addEventListener("click", async (event) => {

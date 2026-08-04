@@ -133,6 +133,7 @@ body {
   letter-spacing: 0.02em;
   font-variant-numeric: tabular-nums;
   line-height: 1.1;
+  cursor: pointer;
 }
 
 .subtitle {
@@ -194,6 +195,17 @@ body {
 
 .menu-item.danger {
   color: var(--danger);
+}
+
+.menu-item.checked::before {
+  content: "✓ ";
+  color: var(--accent);
+}
+
+.menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
 }
 
 .msg-backdrop {

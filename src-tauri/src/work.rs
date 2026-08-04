@@ -596,34 +596,6 @@ fn urlencoding_loose(s: &str) -> String {
     out
 }
 
-/// Parse cookies pasted or captured from the login webview document/cookie bridge.
-pub fn tokens_from_cookie_header(cookie_header: &str) -> SessionTokens {
-    let mut tokens = SessionTokens::default();
-    for part in cookie_header.split(';') {
-        let part = part.trim();
-        if let Some((k, v)) = part.split_once('=') {
-            match k.trim() {
-                "AID" => tokens.aid = v.trim().to_string(),
-                "V2_WS_AID" => tokens.ws_aid = v.trim().to_string(),
-                "V2_WS_RID" => tokens.ws_rid = v.trim().to_string(),
-                _ => {}
-            }
-        }
-    }
-    tokens.updated_at_ms = Some(now_ms());
-    tokens
-}
-
-pub fn tokens_from_parts(aid: String, ws_aid: String, ws_rid: String) -> SessionTokens {
-    SessionTokens {
-        aid,
-        ws_aid,
-        ws_rid,
-        user_id_hash: None,
-        updated_at_ms: Some(now_ms()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

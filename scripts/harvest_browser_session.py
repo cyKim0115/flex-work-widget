@@ -175,7 +175,7 @@ def collect() -> dict:
             "flex.team 로그인 쿠키를 찾지 못했습니다.\n"
             "- Chrome 프로필이 여러 개면, flex에 로그인한 프로필을 확인하세요.\n"
             "- Chrome v130+는 관리자(UAC) 허용이 필요합니다.\n"
-            "- 그래도 실패하면 Edge에서 로그인하거나 Cookie 붙여넣기를 사용하세요."
+            "- 그래도 실패하면 Edge에서 flex.team에 로그인한 뒤 다시 시도하세요."
         )
         if errors:
             # Keep message short for UI

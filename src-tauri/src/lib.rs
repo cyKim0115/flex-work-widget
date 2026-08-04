@@ -4,9 +4,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use tauri::{AppHandle, Emitter, State};
-use work::{
-    fetch_work, need_login, session_dir, tokens_from_cookie_header, SessionStore, WorkSnapshot,
-};
+use work::{fetch_work, need_login, session_dir, SessionStore, WorkSnapshot};
 
 const POLL_INTERVAL_MS: u64 = 60_000;
 const FLEX_HOME: &str = "https://flex.team/home";
@@ -132,25 +130,6 @@ fn harvest_browser_session(app: AppHandle, store: State<'_, SessionStore>) -> Re
 }
 
 #[tauri::command]
-fn import_cookie_header(
-    app: AppHandle,
-    store: State<'_, SessionStore>,
-    cookie_header: String,
-) -> Result<WorkSnapshot, String> {
-    let tokens = tokens_from_cookie_header(&cookie_header);
-    if tokens.aid.is_empty() && tokens.ws_aid.is_empty() {
-        return Ok(need_login(
-            "Cookie에 AID 또는 V2_WS_AID가 없습니다. DevTools → Network → Cookie 헤더를 붙여넣으세요."
-                .into(),
-        ));
-    }
-    store.save(tokens)?;
-    let snap = fetch_work(&store);
-    let _ = app.emit("work-updated", &snap);
-    Ok(snap)
-}
-
-#[tauri::command]
 fn harvest_login_cookies(app: AppHandle, store: State<'_, SessionStore>) -> Result<WorkSnapshot, String> {
     harvest_browser_session(app, store)
 }
@@ -178,8 +157,7 @@ pub fn run() {
             open_login_system,
             open_flex_home,
             harvest_login_cookies,
-            harvest_browser_session,
-            import_cookie_header
+            harvest_browser_session
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
