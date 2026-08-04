@@ -14,7 +14,18 @@ def session_path() -> Path:
     return base / "session.json"
 
 
+def ensure_rookie():
+    try:
+        import rookiepy  # noqa: F401
+        return
+    except ImportError:
+        import subprocess
+
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--user", "rookiepy"])
+
+
 def collect() -> dict:
+    ensure_rookie()
     from rookiepy import chrome, edge
 
     domains = ["flex.team"]
