@@ -14,10 +14,7 @@
           <span class="brand-mark" aria-hidden="true" data-tauri-drag-region></span>
           <span class="title" data-tauri-drag-region>Flex Work</span>
         </span>
-        <span class="header-actions">
-          <span id="state-badge" class="badge" data-tauri-drag-region>—</span>
-          <button id="btn-close" class="btn-close" type="button" title="종료" aria-label="종료">×</button>
-        </span>
+        <span id="state-badge" class="badge" data-tauri-drag-region>—</span>
       </header>
 
       <section class="body" data-tauri-drag-region>
@@ -44,14 +41,52 @@
       <div id="context-menu" class="context-menu hidden">
         <button id="menu-login-system" class="menu-item" type="button">1. 브라우저에서 로그인</button>
         <button id="menu-harvest" class="menu-item" type="button">2. 세션 가져오기</button>
+
         <div class="menu-sep" role="separator"></div>
-        <button id="menu-mode-worked" class="menu-item" type="button">누적 근무시간</button>
-        <button id="menu-mode-remaining" class="menu-item" type="button">남은 근무시간</button>
+
+        <div class="menu-group" data-group="mode">
+          <button
+            id="menu-group-mode"
+            class="menu-item menu-group-toggle"
+            type="button"
+            aria-expanded="false"
+            aria-controls="menu-mode-items"
+          >
+            <span class="menu-group-main">
+              <span class="menu-group-title">표시 모드</span>
+              <span id="menu-mode-summary" class="menu-group-summary">누적</span>
+            </span>
+            <span class="menu-chevron" aria-hidden="true"></span>
+          </button>
+          <div id="menu-mode-items" class="menu-group-items hidden">
+            <button id="menu-mode-worked" class="menu-item menu-sub" type="button">누적 근무시간</button>
+            <button id="menu-mode-remaining" class="menu-item menu-sub" type="button">남은 근무시간</button>
+          </div>
+        </div>
+
+        <div class="menu-group" data-group="theme">
+          <button
+            id="menu-group-theme"
+            class="menu-item menu-group-toggle"
+            type="button"
+            aria-expanded="false"
+            aria-controls="menu-theme-items"
+          >
+            <span class="menu-group-main">
+              <span class="menu-group-title">테마</span>
+              <span id="menu-theme-summary" class="menu-group-summary">시스템</span>
+            </span>
+            <span class="menu-chevron" aria-hidden="true"></span>
+          </button>
+          <div id="menu-theme-items" class="menu-group-items hidden">
+            <button id="menu-theme-system" class="menu-item menu-sub" type="button">시스템</button>
+            <button id="menu-theme-light" class="menu-item menu-sub" type="button">라이트</button>
+            <button id="menu-theme-dark" class="menu-item menu-sub" type="button">다크</button>
+          </div>
+        </div>
+
         <div class="menu-sep" role="separator"></div>
-        <button id="menu-theme-system" class="menu-item" type="button">테마: 시스템</button>
-        <button id="menu-theme-light" class="menu-item" type="button">테마: 라이트</button>
-        <button id="menu-theme-dark" class="menu-item" type="button">테마: 다크</button>
-        <div class="menu-sep" role="separator"></div>
+
         <button id="menu-refresh" class="menu-item" type="button">새로고침</button>
         <button id="menu-open" class="menu-item" type="button">flex.team 열기</button>
         <button id="menu-quit" class="menu-item danger" type="button">종료</button>

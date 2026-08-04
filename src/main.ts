@@ -17,7 +17,7 @@ type WorkSnapshot = {
 
 const COMPACT = { width: 280, height: 128 };
 const MESSAGE = { width: 420, height: 260 };
-const MENU = { width: 300, height: 440 };
+const MENU = { width: 280, height: 360 };
 const TARGET_WORK_SECONDS = 8 * 60 * 60;
 const MODE_KEY = "flex-work-display-mode";
 const THEME_KEY = "flex-work-theme";
@@ -171,15 +171,59 @@ function modeSubtitle(snap: WorkSnapshot): string {
   return snap.label || "오늘 누적 근무시간";
 }
 
+function modeLabel(mode: DisplayMode): string {
+  return mode === "remaining" ? "남은" : "누적";
+}
+
+function themeLabel(theme: ThemeMode): string {
+  switch (theme) {
+    case "light":
+      return "라이트";
+    case "dark":
+      return "다크";
+    default:
+      return "시스템";
+  }
+}
+
 function syncModeMenu() {
   $("menu-mode-worked").classList.toggle("checked", displayMode === "worked");
   $("menu-mode-remaining").classList.toggle("checked", displayMode === "remaining");
+  $("menu-mode-summary").textContent = modeLabel(displayMode);
 }
 
 function syncThemeMenu() {
   $("menu-theme-system").classList.toggle("checked", themeMode === "system");
   $("menu-theme-light").classList.toggle("checked", themeMode === "light");
   $("menu-theme-dark").classList.toggle("checked", themeMode === "dark");
+  $("menu-theme-summary").textContent = themeLabel(themeMode);
+}
+
+function setGroupOpen(groupName: string, open: boolean) {
+  const group = document.querySelector(`.menu-group[data-group="${groupName}"]`);
+  if (!group) return;
+  const toggle = group.querySelector(".menu-group-toggle") as HTMLButtonElement | null;
+  const items = group.querySelector(".menu-group-items");
+  if (!toggle || !items) return;
+  group.classList.toggle("open", open);
+  toggle.setAttribute("aria-expanded", open ? "true" : "false");
+  items.classList.toggle("hidden", !open);
+}
+
+function collapseAllGroups() {
+  document.querySelectorAll(".menu-group").forEach((el) => {
+    const name = (el as HTMLElement).dataset.group;
+    if (name) setGroupOpen(name, false);
+  });
+}
+
+function toggleGroup(groupName: string) {
+  const group = document.querySelector(`.menu-group[data-group="${groupName}"]`);
+  if (!group) return;
+  const willOpen = !group.classList.contains("open");
+  // Accordion: only one category open at a time
+  collapseAllGroups();
+  if (willOpen) setGroupOpen(groupName, true);
 }
 
 function setDisplayMode(mode: DisplayMode) {
@@ -242,6 +286,7 @@ function hideContextMenu() {
   const wasOpen = !$("context-menu").classList.contains("hidden");
   $("context-menu").classList.add("hidden");
   $("context-backdrop").classList.add("hidden");
+  collapseAllGroups();
   if (wasOpen && $("msg-backdrop").classList.contains("hidden")) {
     void setWidgetSize(COMPACT);
   }
@@ -250,12 +295,12 @@ function hideContextMenu() {
 async function showContextMenu(x: number, y: number) {
   syncModeMenu();
   syncThemeMenu();
+  collapseAllGroups();
   await setWidgetSize(MENU);
   const backdrop = $("context-backdrop");
   const menu = $("context-menu");
   backdrop.classList.remove("hidden");
   menu.classList.remove("hidden");
-  // Position after resize so clamping uses the expanded window.
   requestAnimationFrame(() => {
     const menuRect = menu.getBoundingClientRect();
     const maxX = Math.max(8, window.innerWidth - menuRect.width - 8);
@@ -325,11 +370,6 @@ async function boot() {
     setDisplayMode(displayMode === "worked" ? "remaining" : "worked");
   });
 
-  $("btn-close").addEventListener("click", async (event) => {
-    event.stopPropagation();
-    await invoke("quit_app");
-  });
-
   window.addEventListener("blur", () => {
     if ($("msg-backdrop").classList.contains("hidden")) hideContextMenu();
   });
@@ -375,6 +415,16 @@ async function boot() {
     } catch (e) {
       await showMessage("오류", String(e));
     }
+  });
+
+  $("menu-group-mode").addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleGroup("mode");
+  });
+
+  $("menu-group-theme").addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleGroup("theme");
   });
 
   $("menu-mode-worked").addEventListener("click", (event) => {
