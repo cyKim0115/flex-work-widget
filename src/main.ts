@@ -4,6 +4,7 @@ import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 
 type WorkPhase = "NeedLogin" | "NotStarted" | "Working" | "Resting" | "Done" | "FetchError";
 type DisplayMode = "worked" | "remaining";
+type ThemeMode = "system" | "light" | "dark";
 
 type WorkSnapshot = {
   state: WorkPhase;
@@ -16,8 +17,10 @@ type WorkSnapshot = {
 
 const COMPACT = { width: 280, height: 128 };
 const MESSAGE = { width: 420, height: 260 };
+const MENU = { width: 300, height: 440 };
 const TARGET_WORK_SECONDS = 8 * 60 * 60;
 const MODE_KEY = "flex-work-display-mode";
+const THEME_KEY = "flex-work-theme";
 
 function $(id: string): HTMLElement {
   const el = document.getElementById(id);
@@ -86,6 +89,20 @@ function saveMode(mode: DisplayMode) {
   localStorage.setItem(MODE_KEY, mode);
 }
 
+function loadTheme(): ThemeMode {
+  const raw = localStorage.getItem(THEME_KEY);
+  if (raw === "light" || raw === "dark" || raw === "system") return raw;
+  return "system";
+}
+
+function saveTheme(theme: ThemeMode) {
+  localStorage.setItem(THEME_KEY, theme);
+}
+
+function applyTheme(theme: ThemeMode) {
+  document.documentElement.dataset.theme = theme;
+}
+
 let latest: WorkSnapshot = {
   state: "NeedLogin",
   workedSeconds: null,
@@ -96,6 +113,7 @@ let latest: WorkSnapshot = {
 };
 
 let displayMode: DisplayMode = loadMode();
+let themeMode: ThemeMode = loadTheme();
 let tickHandle: number | null = null;
 let msgResolver: (() => void) | null = null;
 
@@ -158,11 +176,24 @@ function syncModeMenu() {
   $("menu-mode-remaining").classList.toggle("checked", displayMode === "remaining");
 }
 
+function syncThemeMenu() {
+  $("menu-theme-system").classList.toggle("checked", themeMode === "system");
+  $("menu-theme-light").classList.toggle("checked", themeMode === "light");
+  $("menu-theme-dark").classList.toggle("checked", themeMode === "dark");
+}
+
 function setDisplayMode(mode: DisplayMode) {
   displayMode = mode;
   saveMode(mode);
   syncModeMenu();
   render(latest);
+}
+
+function setThemeMode(theme: ThemeMode) {
+  themeMode = theme;
+  saveTheme(theme);
+  applyTheme(theme);
+  syncThemeMenu();
 }
 
 function render(snap: WorkSnapshot) {
@@ -208,21 +239,30 @@ function ensureTicker() {
 }
 
 function hideContextMenu() {
+  const wasOpen = !$("context-menu").classList.contains("hidden");
   $("context-menu").classList.add("hidden");
   $("context-backdrop").classList.add("hidden");
+  if (wasOpen && $("msg-backdrop").classList.contains("hidden")) {
+    void setWidgetSize(COMPACT);
+  }
 }
 
-function showContextMenu(x: number, y: number) {
+async function showContextMenu(x: number, y: number) {
   syncModeMenu();
+  syncThemeMenu();
+  await setWidgetSize(MENU);
   const backdrop = $("context-backdrop");
   const menu = $("context-menu");
   backdrop.classList.remove("hidden");
   menu.classList.remove("hidden");
-  const menuRect = menu.getBoundingClientRect();
-  const maxX = Math.max(8, window.innerWidth - menuRect.width - 8);
-  const maxY = Math.max(8, window.innerHeight - menuRect.height - 8);
-  menu.style.left = `${Math.min(x, maxX)}px`;
-  menu.style.top = `${Math.min(y, maxY)}px`;
+  // Position after resize so clamping uses the expanded window.
+  requestAnimationFrame(() => {
+    const menuRect = menu.getBoundingClientRect();
+    const maxX = Math.max(8, window.innerWidth - menuRect.width - 8);
+    const maxY = Math.max(8, window.innerHeight - menuRect.height - 8);
+    menu.style.left = `${Math.min(Math.max(8, x), maxX)}px`;
+    menu.style.top = `${Math.min(Math.max(8, y), maxY)}px`;
+  });
 }
 
 async function applySnap(snap: WorkSnapshot) {
@@ -249,12 +289,14 @@ async function refresh() {
 
 async function boot() {
   const backdrop = $("context-backdrop");
+  applyTheme(themeMode);
   syncModeMenu();
+  syncThemeMenu();
 
   window.addEventListener("contextmenu", (event) => {
     event.preventDefault();
     if (!$("msg-backdrop").classList.contains("hidden")) return;
-    showContextMenu(event.clientX, event.clientY);
+    void showContextMenu(event.clientX, event.clientY);
   });
 
   backdrop.addEventListener("pointerdown", (event) => {
@@ -281,6 +323,11 @@ async function boot() {
     event.stopPropagation();
     if (!$("msg-backdrop").classList.contains("hidden")) return;
     setDisplayMode(displayMode === "worked" ? "remaining" : "worked");
+  });
+
+  $("btn-close").addEventListener("click", async (event) => {
+    event.stopPropagation();
+    await invoke("quit_app");
   });
 
   window.addEventListener("blur", () => {
@@ -340,6 +387,24 @@ async function boot() {
     event.stopPropagation();
     hideContextMenu();
     setDisplayMode("remaining");
+  });
+
+  $("menu-theme-system").addEventListener("click", (event) => {
+    event.stopPropagation();
+    hideContextMenu();
+    setThemeMode("system");
+  });
+
+  $("menu-theme-light").addEventListener("click", (event) => {
+    event.stopPropagation();
+    hideContextMenu();
+    setThemeMode("light");
+  });
+
+  $("menu-theme-dark").addEventListener("click", (event) => {
+    event.stopPropagation();
+    hideContextMenu();
+    setThemeMode("dark");
   });
 
   $("menu-refresh").addEventListener("click", async (event) => {
