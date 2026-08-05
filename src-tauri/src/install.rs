@@ -164,11 +164,23 @@ pub fn autostart_is_enabled() -> Result<bool, String> {
 fn vite_dev_server_up() -> bool {
     use std::net::TcpStream;
     use std::time::Duration;
-    TcpStream::connect_timeout(
-        &"127.0.0.1:1420".parse().expect("static addr"),
-        Duration::from_millis(400),
-    )
-    .is_ok()
+
+    // Vite default `host: false` often binds IPv6 localhost only on Windows.
+    let addrs = ["127.0.0.1:1420", "[::1]:1420"];
+    for _ in 0..8 {
+        for addr in addrs {
+            if TcpStream::connect_timeout(
+                &addr.parse().expect("static addr"),
+                Duration::from_millis(250),
+            )
+            .is_ok()
+            {
+                return true;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    false
 }
 
 #[cfg(all(debug_assertions, windows))]
