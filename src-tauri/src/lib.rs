@@ -1,8 +1,13 @@
+mod install;
 mod work;
 
 use std::path::PathBuf;
 use std::process::Command;
 
+use install::{
+    autostart_disable, autostart_enable, autostart_is_enabled, cleanup_stale_debug_autostart,
+    ensure_installed_release, guard_debug_requires_vite,
+};
 use tauri::{AppHandle, Emitter, State};
 use work::{fetch_work, need_login, session_dir, SessionStore, WorkSnapshot};
 
@@ -18,6 +23,31 @@ fn get_poll_interval_ms() -> u64 {
 #[tauri::command]
 fn quit_app(app: AppHandle) {
     app.exit(0);
+}
+
+#[tauri::command]
+fn is_dev_build() -> bool {
+    cfg!(debug_assertions)
+}
+
+#[tauri::command]
+fn enable_autostart() -> Result<(), String> {
+    autostart_enable()
+}
+
+#[tauri::command]
+fn disable_autostart() -> Result<(), String> {
+    autostart_disable()
+}
+
+#[tauri::command]
+fn is_autostart_enabled() -> Result<bool, String> {
+    autostart_is_enabled()
+}
+
+#[tauri::command]
+fn install_release_copy() -> Result<String, String> {
+    ensure_installed_release().map(|p| p.display().to_string())
 }
 
 #[tauri::command]
@@ -144,6 +174,8 @@ fn get_work(_app: AppHandle, store: State<'_, SessionStore>) -> WorkSnapshot {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    guard_debug_requires_vite();
+
     let _ = std::fs::create_dir_all(session_dir());
     let store = SessionStore::new(session_dir());
 
@@ -153,12 +185,23 @@ pub fn run() {
             get_work,
             get_poll_interval_ms,
             quit_app,
+            is_dev_build,
+            enable_autostart,
+            disable_autostart,
+            is_autostart_enabled,
+            install_release_copy,
             open_login,
             open_login_system,
             open_flex_home,
             harvest_login_cookies,
             harvest_browser_session
         ])
+        .setup(|_app| {
+            cleanup_stale_debug_autostart();
+            // Release builds keep a stable copy under LOCALAPPDATA for shortcuts/autostart.
+            let _ = ensure_installed_release();
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

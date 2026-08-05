@@ -17,10 +17,13 @@ type WorkSnapshot = {
 
 const COMPACT = { width: 280, height: 128 };
 const MESSAGE = { width: 420, height: 260 };
-const MENU = { width: 280, height: 360 };
+const MENU = { width: 280, height: 400 };
 const TARGET_WORK_SECONDS = 8 * 60 * 60;
 const MODE_KEY = "flex-work-display-mode";
 const THEME_KEY = "flex-work-theme";
+
+let isDevBuild = false;
+let autostartEnabled = false;
 
 function $(id: string): HTMLElement {
   const el = document.getElementById(id);
@@ -101,6 +104,31 @@ function saveTheme(theme: ThemeMode) {
 
 function applyTheme(theme: ThemeMode) {
   document.documentElement.dataset.theme = theme;
+}
+
+async function getAutostartEnabled(): Promise<boolean> {
+  try {
+    return await invoke<boolean>("is_autostart_enabled");
+  } catch {
+    return false;
+  }
+}
+
+async function getIsDevBuild(): Promise<boolean> {
+  try {
+    return await invoke<boolean>("is_dev_build");
+  } catch {
+    return false;
+  }
+}
+
+function syncAutostartMenu() {
+  const menuAutostart = $("menu-autostart");
+  if (isDevBuild) {
+    menuAutostart.textContent = "시작프로그램 (시작.bat 사용)";
+  } else {
+    menuAutostart.textContent = `${autostartEnabled ? "✓ " : ""}시작프로그램`;
+  }
 }
 
 let latest: WorkSnapshot = {
@@ -295,6 +323,7 @@ function hideContextMenu() {
 async function showContextMenu(x: number, y: number) {
   syncModeMenu();
   syncThemeMenu();
+  syncAutostartMenu();
   collapseAllGroups();
   await setWidgetSize(MENU);
   const backdrop = $("context-backdrop");
@@ -337,11 +366,18 @@ async function boot() {
   applyTheme(themeMode);
   syncModeMenu();
   syncThemeMenu();
+  isDevBuild = await getIsDevBuild();
+  autostartEnabled = await getAutostartEnabled();
+  syncAutostartMenu();
 
   window.addEventListener("contextmenu", (event) => {
     event.preventDefault();
     if (!$("msg-backdrop").classList.contains("hidden")) return;
-    void showContextMenu(event.clientX, event.clientY);
+    void (async () => {
+      autostartEnabled = await getAutostartEnabled();
+      isDevBuild = await getIsDevBuild();
+      await showContextMenu(event.clientX, event.clientY);
+    })();
   });
 
   backdrop.addEventListener("pointerdown", (event) => {
@@ -455,6 +491,36 @@ async function boot() {
     event.stopPropagation();
     hideContextMenu();
     setThemeMode("dark");
+  });
+
+  const menuAutostart = $("menu-autostart") as HTMLButtonElement;
+  menuAutostart.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    menuAutostart.disabled = true;
+    try {
+      isDevBuild = await getIsDevBuild();
+      if (isDevBuild) {
+        hideContextMenu();
+        await showMessage(
+          "시작프로그램",
+          "개발 모드에서는 시작프로그램을 바꿀 수 없습니다.\n\n「시작.bat」으로 설치·실행한 뒤, 위젯에서 다시 우클릭 → 시작프로그램을 켜 주세요.",
+        );
+        return;
+      }
+      autostartEnabled = await getAutostartEnabled();
+      if (autostartEnabled) {
+        await invoke("disable_autostart");
+      } else {
+        await invoke("enable_autostart");
+      }
+      autostartEnabled = await getAutostartEnabled();
+      syncAutostartMenu();
+    } catch (e) {
+      hideContextMenu();
+      await showMessage("오류", String(e));
+    } finally {
+      menuAutostart.disabled = false;
+    }
   });
 
   $("menu-refresh").addEventListener("click", async (event) => {
