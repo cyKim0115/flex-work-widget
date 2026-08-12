@@ -10,17 +10,7 @@ import {
   type DisplayMode,
   type ThemeMode,
 } from "./preferences";
-
-type WorkPhase = "NeedLogin" | "NotStarted" | "Working" | "Resting" | "Done" | "FetchError";
-
-type WorkSnapshot = {
-  state: WorkPhase;
-  workedSeconds: number | null;
-  label: string;
-  startedAt: string | null;
-  error: string | null;
-  fetchedAtMs: number | null;
-};
+import { phaseLabel, type WorkPhase, type WorkSnapshot } from "./work-types";
 
 const COMPACT = { width: 280, height: 128 };
 const MESSAGE = { width: 420, height: 260 };
@@ -55,33 +45,6 @@ function phaseBadgeClass(state: WorkPhase): string {
     default:
       return "error";
   }
-}
-
-function phaseBadgeText(state: WorkPhase): string {
-  switch (state) {
-    case "NotStarted":
-      return "출근 전";
-    case "Working":
-      return "근무 중";
-    case "Resting":
-      return "휴게 중";
-    case "Done":
-      return "퇴근";
-    case "NeedLogin":
-      return "로그인 필요";
-    default:
-      return "오류";
-  }
-}
-
-function tidyMessage(raw: string): string {
-  return raw
-    .replace(/\r\n/g, "\n")
-    .replace(/\nLocation:\s*\n\s*rookie-rs[\s\S]*$/gim, "")
-    .replace(/chrome:\s*decrypt_encrypted_value failed/gi, "Chrome 쿠키 복호화 실패")
-    .replace(/edge:\s*decrypt_encrypted_value failed/gi, "Edge 쿠키 복호화 실패")
-    .replace(/can be decrypted only when running as admin[^\n]*/gi, "관리자 권한(UAC) 필요")
-    .trim();
 }
 
 let latest: WorkSnapshot = {
@@ -119,7 +82,7 @@ function hideMessage() {
 async function showMessage(title: string, body: string): Promise<void> {
   hideContextMenu();
   $("msg-title").textContent = title;
-  $("msg-body").textContent = tidyMessage(body);
+  $("msg-body").textContent = body;
   await setWidgetSize(MESSAGE);
   $("msg-backdrop").classList.remove("hidden");
   return new Promise((resolve) => {
@@ -164,7 +127,7 @@ function render(snap: WorkSnapshot) {
 
   const badge = $("state-badge");
   badge.className = `badge ${phaseBadgeClass(snap.state)}`;
-  badge.textContent = phaseBadgeText(snap.state);
+  badge.textContent = phaseLabel(snap.state);
 
   const worked = liveWorkedSeconds(snap);
   if (snap.state === "NotStarted") {
@@ -184,7 +147,7 @@ function render(snap: WorkSnapshot) {
   const now = new Date();
   const hhmm = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   if (snap.state === "NeedLogin") {
-    status.textContent = "우클릭 → 브라우저 로그인 → 세션 가져오기";
+    status.textContent = "우클릭 → 설정에서 연결";
   } else if (snap.state === "FetchError") {
     status.textContent = `갱신 실패 · ${hhmm}`;
   } else {
@@ -257,7 +220,7 @@ async function boot() {
   window.addEventListener("contextmenu", (event) => {
     event.preventDefault();
     if (!$("msg-backdrop").classList.contains("hidden")) return;
-    void showContextMenu(event.clientX, event.clientY);
+    showContextMenu(event.clientX, event.clientY);
   });
 
   backdrop.addEventListener("pointerdown", (event) => {
@@ -301,52 +264,9 @@ async function boot() {
     }
   });
 
-  $("menu-login-system").addEventListener("click", async (event) => {
-    event.stopPropagation();
-    hideContextMenu();
-    try {
-      await invoke("open_login_system");
-    } catch (e) {
-      await showMessage("오류", String(e));
-    }
-  });
-
-  $("menu-harvest").addEventListener("click", async (event) => {
-    event.stopPropagation();
-    hideContextMenu();
-    try {
-      await showMessage(
-        "세션 가져오기",
-        "Chrome/Edge 쿠키를 읽기 위해 관리자 권한(UAC) 확인이 뜹니다.\n허용한 뒤 근무시간이 갱신됩니다.",
-      );
-      const snap = await invoke<WorkSnapshot>("harvest_browser_session");
-      await applySnap(snap);
-      if (snap.state === "NeedLogin" || snap.state === "FetchError") {
-        await showMessage(
-          "세션 가져오기 실패",
-          `${snap.error || snap.label || "실패"}\n\nEdge에서 flex.team에 로그인한 뒤 다시 시도하세요.`,
-        );
-      }
-    } catch (e) {
-      await showMessage("오류", String(e));
-    }
-  });
-
   $("menu-settings").addEventListener("click", (event) => {
     event.stopPropagation();
     void openSettings();
-  });
-
-  $("menu-refresh").addEventListener("click", async (event) => {
-    event.stopPropagation();
-    hideContextMenu();
-    await refresh();
-  });
-
-  $("menu-open").addEventListener("click", async (event) => {
-    event.stopPropagation();
-    hideContextMenu();
-    await invoke("open_flex_home");
   });
 
   $("menu-quit").addEventListener("click", async (event) => {
