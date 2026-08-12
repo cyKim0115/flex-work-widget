@@ -23,6 +23,22 @@
         "transparent": true,
         "shadow": false,
         "skipTaskbar": false
+      },
+      {
+        "label": "settings",
+        "title": "Flex Work — 설정",
+        "url": "settings.html",
+        "width": 400,
+        "height": 480,
+        "minWidth": 360,
+        "minHeight": 420,
+        "resizable": true,
+        "decorations": true,
+        "alwaysOnTop": false,
+        "transparent": false,
+        "visible": false,
+        "center": true,
+        "skipTaskbar": false
       }
     ],
     "security": {

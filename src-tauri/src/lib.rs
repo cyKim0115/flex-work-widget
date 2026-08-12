@@ -8,7 +8,9 @@ use install::{
     autostart_disable, autostart_enable, autostart_is_enabled, cleanup_stale_debug_autostart,
     ensure_installed_release, guard_debug_requires_vite,
 };
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
+
+const SETTINGS_LABEL: &str = "settings";
 use work::{fetch_work, need_login, session_dir, SessionStore, WorkSnapshot};
 
 const POLL_INTERVAL_MS: u64 = 60_000;
@@ -23,6 +25,28 @@ fn get_poll_interval_ms() -> u64 {
 #[tauri::command]
 fn quit_app(app: AppHandle) {
     app.exit(0);
+}
+
+#[tauri::command]
+fn open_settings_window(app: AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window(SETTINGS_LABEL)
+        .ok_or_else(|| "settings window not found".to_string())?;
+    window.show().map_err(|e| e.to_string())?;
+    window.unminimize().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())?;
+    window
+        .emit("settings-open", ())
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn close_settings_window(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(SETTINGS_LABEL) {
+        window.hide().map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -185,6 +209,8 @@ pub fn run() {
             get_work,
             get_poll_interval_ms,
             quit_app,
+            open_settings_window,
+            close_settings_window,
             is_dev_build,
             enable_autostart,
             disable_autostart,
@@ -196,6 +222,15 @@ pub fn run() {
             harvest_login_cookies,
             harvest_browser_session
         ])
+        .on_window_event(|window, event| {
+            if window.label() != SETTINGS_LABEL {
+                return;
+            }
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .setup(|_app| {
             cleanup_stale_debug_autostart();
             // Release builds keep a stable copy under LOCALAPPDATA for shortcuts/autostart.

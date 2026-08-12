@@ -1,10 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import {
+  applyTheme,
+  loadDisplayMode,
+  loadTheme,
+  modeLabel,
+  saveDisplayMode,
+  type DisplayMode,
+  type ThemeMode,
+} from "./preferences";
 
 type WorkPhase = "NeedLogin" | "NotStarted" | "Working" | "Resting" | "Done" | "FetchError";
-type DisplayMode = "worked" | "remaining";
-type ThemeMode = "system" | "light" | "dark";
 
 type WorkSnapshot = {
   state: WorkPhase;
@@ -17,13 +24,8 @@ type WorkSnapshot = {
 
 const COMPACT = { width: 280, height: 128 };
 const MESSAGE = { width: 420, height: 260 };
-const MENU = { width: 280, height: 400 };
+const MENU = { width: 280, height: 280 };
 const TARGET_WORK_SECONDS = 8 * 60 * 60;
-const MODE_KEY = "flex-work-display-mode";
-const THEME_KEY = "flex-work-theme";
-
-let isDevBuild = false;
-let autostartEnabled = false;
 
 function $(id: string): HTMLElement {
   const el = document.getElementById(id);
@@ -83,54 +85,6 @@ function tidyMessage(raw: string): string {
     .trim();
 }
 
-function loadMode(): DisplayMode {
-  const raw = localStorage.getItem(MODE_KEY);
-  return raw === "remaining" ? "remaining" : "worked";
-}
-
-function saveMode(mode: DisplayMode) {
-  localStorage.setItem(MODE_KEY, mode);
-}
-
-function loadTheme(): ThemeMode {
-  const raw = localStorage.getItem(THEME_KEY);
-  if (raw === "light" || raw === "dark" || raw === "system") return raw;
-  return "system";
-}
-
-function saveTheme(theme: ThemeMode) {
-  localStorage.setItem(THEME_KEY, theme);
-}
-
-function applyTheme(theme: ThemeMode) {
-  document.documentElement.dataset.theme = theme;
-}
-
-async function getAutostartEnabled(): Promise<boolean> {
-  try {
-    return await invoke<boolean>("is_autostart_enabled");
-  } catch {
-    return false;
-  }
-}
-
-async function getIsDevBuild(): Promise<boolean> {
-  try {
-    return await invoke<boolean>("is_dev_build");
-  } catch {
-    return false;
-  }
-}
-
-function syncAutostartMenu() {
-  const menuAutostart = $("menu-autostart");
-  if (isDevBuild) {
-    menuAutostart.textContent = "시작프로그램 (시작.bat 사용)";
-  } else {
-    menuAutostart.textContent = `${autostartEnabled ? "✓ " : ""}시작프로그램`;
-  }
-}
-
 let latest: WorkSnapshot = {
   state: "NeedLogin",
   workedSeconds: null,
@@ -140,7 +94,7 @@ let latest: WorkSnapshot = {
   fetchedAtMs: null,
 };
 
-let displayMode: DisplayMode = loadMode();
+let displayMode: DisplayMode = loadDisplayMode();
 let themeMode: ThemeMode = loadTheme();
 let tickHandle: number | null = null;
 let msgResolver: (() => void) | null = null;
@@ -199,73 +153,10 @@ function modeSubtitle(snap: WorkSnapshot): string {
   return snap.label || "오늘 누적 근무시간";
 }
 
-function modeLabel(mode: DisplayMode): string {
-  return mode === "remaining" ? "남은" : "누적";
-}
-
-function themeLabel(theme: ThemeMode): string {
-  switch (theme) {
-    case "light":
-      return "라이트";
-    case "dark":
-      return "다크";
-    default:
-      return "시스템";
-  }
-}
-
-function syncModeMenu() {
-  $("menu-mode-worked").classList.toggle("checked", displayMode === "worked");
-  $("menu-mode-remaining").classList.toggle("checked", displayMode === "remaining");
-  $("menu-mode-summary").textContent = modeLabel(displayMode);
-}
-
-function syncThemeMenu() {
-  $("menu-theme-system").classList.toggle("checked", themeMode === "system");
-  $("menu-theme-light").classList.toggle("checked", themeMode === "light");
-  $("menu-theme-dark").classList.toggle("checked", themeMode === "dark");
-  $("menu-theme-summary").textContent = themeLabel(themeMode);
-}
-
-function setGroupOpen(groupName: string, open: boolean) {
-  const group = document.querySelector(`.menu-group[data-group="${groupName}"]`);
-  if (!group) return;
-  const toggle = group.querySelector(".menu-group-toggle") as HTMLButtonElement | null;
-  const items = group.querySelector(".menu-group-items");
-  if (!toggle || !items) return;
-  group.classList.toggle("open", open);
-  toggle.setAttribute("aria-expanded", open ? "true" : "false");
-  items.classList.toggle("hidden", !open);
-}
-
-function collapseAllGroups() {
-  document.querySelectorAll(".menu-group").forEach((el) => {
-    const name = (el as HTMLElement).dataset.group;
-    if (name) setGroupOpen(name, false);
-  });
-}
-
-function toggleGroup(groupName: string) {
-  const group = document.querySelector(`.menu-group[data-group="${groupName}"]`);
-  if (!group) return;
-  const willOpen = !group.classList.contains("open");
-  // Accordion: only one category open at a time
-  collapseAllGroups();
-  if (willOpen) setGroupOpen(groupName, true);
-}
-
 function setDisplayMode(mode: DisplayMode) {
   displayMode = mode;
-  saveMode(mode);
-  syncModeMenu();
+  saveDisplayMode(mode);
   render(latest);
-}
-
-function setThemeMode(theme: ThemeMode) {
-  themeMode = theme;
-  saveTheme(theme);
-  applyTheme(theme);
-  syncThemeMenu();
 }
 
 function render(snap: WorkSnapshot) {
@@ -298,7 +189,7 @@ function render(snap: WorkSnapshot) {
   } else if (snap.state === "FetchError") {
     status.textContent = `갱신 실패 · ${hhmm}`;
   } else {
-    const modeHint = displayMode === "remaining" ? "남은" : "누적";
+    const modeHint = modeLabel(displayMode);
     status.textContent = `${modeHint} · updated ${hhmm}`;
   }
 }
@@ -314,17 +205,12 @@ function hideContextMenu() {
   const wasOpen = !$("context-menu").classList.contains("hidden");
   $("context-menu").classList.add("hidden");
   $("context-backdrop").classList.add("hidden");
-  collapseAllGroups();
   if (wasOpen && $("msg-backdrop").classList.contains("hidden")) {
     void setWidgetSize(COMPACT);
   }
 }
 
 async function showContextMenu(x: number, y: number) {
-  syncModeMenu();
-  syncThemeMenu();
-  syncAutostartMenu();
-  collapseAllGroups();
   await setWidgetSize(MENU);
   const backdrop = $("context-backdrop");
   const menu = $("context-menu");
@@ -337,6 +223,15 @@ async function showContextMenu(x: number, y: number) {
     menu.style.left = `${Math.min(Math.max(8, x), maxX)}px`;
     menu.style.top = `${Math.min(Math.max(8, y), maxY)}px`;
   });
+}
+
+async function openSettings() {
+  hideContextMenu();
+  try {
+    await invoke("open_settings_window");
+  } catch (e) {
+    await showMessage("오류", String(e));
+  }
 }
 
 async function applySnap(snap: WorkSnapshot) {
@@ -364,18 +259,11 @@ async function refresh() {
 async function boot() {
   const backdrop = $("context-backdrop");
   applyTheme(themeMode);
-  syncModeMenu();
-  syncThemeMenu();
-  isDevBuild = await getIsDevBuild();
-  autostartEnabled = await getAutostartEnabled();
-  syncAutostartMenu();
 
   window.addEventListener("contextmenu", (event) => {
     event.preventDefault();
     if (!$("msg-backdrop").classList.contains("hidden")) return;
     void (async () => {
-      autostartEnabled = await getAutostartEnabled();
-      isDevBuild = await getIsDevBuild();
       await showContextMenu(event.clientX, event.clientY);
     })();
   });
@@ -397,7 +285,6 @@ async function boot() {
     if (event.target === $("msg-backdrop")) hideMessage();
   });
 
-  // Click time area to toggle display mode
   const timeEl = $("time");
   timeEl.title = "클릭: 누적 ↔ 남은 근무시간";
   timeEl.addEventListener("click", (event) => {
@@ -453,74 +340,9 @@ async function boot() {
     }
   });
 
-  $("menu-group-mode").addEventListener("click", (event) => {
+  $("menu-settings").addEventListener("click", (event) => {
     event.stopPropagation();
-    toggleGroup("mode");
-  });
-
-  $("menu-group-theme").addEventListener("click", (event) => {
-    event.stopPropagation();
-    toggleGroup("theme");
-  });
-
-  $("menu-mode-worked").addEventListener("click", (event) => {
-    event.stopPropagation();
-    hideContextMenu();
-    setDisplayMode("worked");
-  });
-
-  $("menu-mode-remaining").addEventListener("click", (event) => {
-    event.stopPropagation();
-    hideContextMenu();
-    setDisplayMode("remaining");
-  });
-
-  $("menu-theme-system").addEventListener("click", (event) => {
-    event.stopPropagation();
-    hideContextMenu();
-    setThemeMode("system");
-  });
-
-  $("menu-theme-light").addEventListener("click", (event) => {
-    event.stopPropagation();
-    hideContextMenu();
-    setThemeMode("light");
-  });
-
-  $("menu-theme-dark").addEventListener("click", (event) => {
-    event.stopPropagation();
-    hideContextMenu();
-    setThemeMode("dark");
-  });
-
-  const menuAutostart = $("menu-autostart") as HTMLButtonElement;
-  menuAutostart.addEventListener("click", async (event) => {
-    event.stopPropagation();
-    menuAutostart.disabled = true;
-    try {
-      isDevBuild = await getIsDevBuild();
-      if (isDevBuild) {
-        hideContextMenu();
-        await showMessage(
-          "시작프로그램",
-          "개발 모드에서는 시작프로그램을 바꿀 수 없습니다.\n\n「시작.bat」으로 설치·실행한 뒤, 위젯에서 다시 우클릭 → 시작프로그램을 켜 주세요.",
-        );
-        return;
-      }
-      autostartEnabled = await getAutostartEnabled();
-      if (autostartEnabled) {
-        await invoke("disable_autostart");
-      } else {
-        await invoke("enable_autostart");
-      }
-      autostartEnabled = await getAutostartEnabled();
-      syncAutostartMenu();
-    } catch (e) {
-      hideContextMenu();
-      await showMessage("오류", String(e));
-    } finally {
-      menuAutostart.disabled = false;
-    }
+    void openSettings();
   });
 
   $("menu-refresh").addEventListener("click", async (event) => {
@@ -539,6 +361,13 @@ async function boot() {
     event.stopPropagation();
     hideContextMenu();
     await invoke("quit_app");
+  });
+
+  await listen<{ displayMode: DisplayMode; theme: ThemeMode }>("settings-changed", (event) => {
+    displayMode = event.payload.displayMode;
+    themeMode = event.payload.theme;
+    applyTheme(themeMode);
+    render(latest);
   });
 
   await listen<WorkSnapshot>("work-updated", (event) => {

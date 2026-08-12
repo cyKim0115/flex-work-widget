@@ -10,7 +10,8 @@
     "tauri": "tauri",
     "build:app": "tauri build",
     "make:icon": "python scripts/make_icon.py",
-    "start:app": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/launch-user.ps1"
+    "start:app": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/launch-user.ps1",
+    "rebuild:restart": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/rebuild-restart.ps1"
   },
   "dependencies": {
     "@tauri-apps/api": "^2"

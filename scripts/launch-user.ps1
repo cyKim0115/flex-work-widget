@@ -1,5 +1,10 @@
 # Launches the standalone widget for everyday use.
-# Installs release exe to %LOCALAPPDATA%\FlexWorkWidget\ and starts it.
+# Rebuilds release when source is newer than the installed exe.
+# Use -ForceRebuild to always rebuild before install (agent / post-task refresh).
+
+param(
+  [switch]$ForceRebuild
+)
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
@@ -10,6 +15,7 @@ if (-not (Test-Path (Join-Path $Root "package.json"))) {
 $InstallDir = Join-Path $env:LOCALAPPDATA "FlexWorkWidget"
 $InstallExe = Join-Path $InstallDir "flex-work-widget.exe"
 $ReleaseExe = Join-Path $Root "src-tauri\target\release\flex-work-widget.exe"
+$ProcessName = "flex-work-widget"
 
 function Show-Error([string]$Message) {
   Add-Type -AssemblyName PresentationFramework | Out-Null
@@ -32,6 +38,40 @@ function Ensure-VcEnv {
   return $bat
 }
 
+function Get-SourceStamp {
+  $paths = @(
+    (Join-Path $Root "package.json"),
+    (Join-Path $Root "index.html"),
+    (Join-Path $Root "settings.html"),
+    (Join-Path $Root "vite.config.ts"),
+    (Join-Path $Root "src-tauri\Cargo.toml"),
+    (Join-Path $Root "src-tauri\tauri.conf.json")
+  )
+  $latest = [datetime]::MinValue
+  foreach ($p in $paths) {
+    if (Test-Path $p) {
+      $t = (Get-Item $p).LastWriteTimeUtc
+      if ($t -gt $latest) { $latest = $t }
+    }
+  }
+  foreach ($dir in @("src", "src-tauri\src", "src-tauri\capabilities")) {
+    $full = Join-Path $Root $dir
+    if (-not (Test-Path $full)) { continue }
+    Get-ChildItem $full -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+      if ($_.LastWriteTimeUtc -gt $latest) { $latest = $_.LastWriteTimeUtc }
+    }
+  }
+  return $latest
+}
+
+function Test-NeedsRebuild {
+  if ($ForceRebuild) { return $true }
+  if (-not (Test-Path $ReleaseExe)) { return $true }
+  $builtAt = (Get-Item $ReleaseExe).LastWriteTimeUtc
+  $sourceAt = Get-SourceStamp
+  return $sourceAt -gt $builtAt
+}
+
 function Build-Release {
   $vcvars = Ensure-VcEnv
   if (-not $vcvars) {
@@ -40,6 +80,15 @@ function Build-Release {
   }
 
   Write-Host "Release 빌드 중 (처음에는 몇 분 걸릴 수 있습니다)..."
+  if (-not (Test-Path (Join-Path $Root "node_modules"))) {
+    Push-Location $Root
+    npm install
+    Pop-Location
+    if ($LASTEXITCODE -ne 0) {
+      Show-Error "npm install 실패."
+      exit 1
+    }
+  }
   $cmd = "`"$vcvars`" && cd /d `"$Root`" && npm run build:app"
   cmd /c $cmd
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path $ReleaseExe)) {
@@ -48,33 +97,31 @@ function Build-Release {
   }
 }
 
-if (-not (Test-Path $InstallExe)) {
-  if (-not (Test-Path $ReleaseExe)) {
-    Push-Location $Root
-    try {
-      if (-not (Test-Path (Join-Path $Root "node_modules"))) {
-        Write-Host "npm install..."
-        npm install
-      }
-      Build-Release
-    } finally {
-      Pop-Location
-    }
+function Stop-RunningWidget {
+  Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | ForEach-Object {
+    Write-Host "실행 중인 위젯 종료 (PID $($_.Id))..."
+    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 400
   }
 }
 
-if (-not (Test-Path $ReleaseExe) -and -not (Test-Path $InstallExe)) {
+if (Test-NeedsRebuild) {
+  Build-Release
+}
+
+if (-not (Test-Path $ReleaseExe)) {
   Show-Error "Release exe를 찾을 수 없습니다. 먼저 npm run build:app 을 실행하세요."
   exit 1
 }
 
+Stop-RunningWidget
+
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-if (Test-Path $ReleaseExe) {
-  $tmp = Join-Path $InstallDir "flex-work-widget.new.exe"
-  Copy-Item -Force $ReleaseExe $tmp
-  if (Test-Path $InstallExe) { Remove-Item -Force $InstallExe }
-  Rename-Item -Force $tmp (Split-Path $InstallExe -Leaf)
-}
+$tmp = Join-Path $InstallDir "flex-work-widget.new.exe"
+Copy-Item -Force $ReleaseExe $tmp
+if (Test-Path $InstallExe) { Remove-Item -Force $InstallExe }
+Rename-Item -Force $tmp (Split-Path $InstallExe -Leaf)
+Write-Host "설치 완료: $InstallExe"
 
 Remove-Item (Join-Path $InstallDir "icon.ico") -Force -ErrorAction SilentlyContinue
 
