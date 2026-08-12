@@ -24,7 +24,6 @@ type WorkSnapshot = {
 
 const COMPACT = { width: 280, height: 128 };
 const MESSAGE = { width: 420, height: 260 };
-const MENU = { width: 280, height: 280 };
 const TARGET_WORK_SECONDS = 8 * 60 * 60;
 
 function $(id: string): HTMLElement {
@@ -202,16 +201,11 @@ function ensureTicker() {
 }
 
 function hideContextMenu() {
-  const wasOpen = !$("context-menu").classList.contains("hidden");
   $("context-menu").classList.add("hidden");
   $("context-backdrop").classList.add("hidden");
-  if (wasOpen && $("msg-backdrop").classList.contains("hidden")) {
-    void setWidgetSize(COMPACT);
-  }
 }
 
-async function showContextMenu(x: number, y: number) {
-  await setWidgetSize(MENU);
+function showContextMenu(x: number, y: number) {
   const backdrop = $("context-backdrop");
   const menu = $("context-menu");
   backdrop.classList.remove("hidden");
@@ -263,9 +257,7 @@ async function boot() {
   window.addEventListener("contextmenu", (event) => {
     event.preventDefault();
     if (!$("msg-backdrop").classList.contains("hidden")) return;
-    void (async () => {
-      await showContextMenu(event.clientX, event.clientY);
-    })();
+    void showContextMenu(event.clientX, event.clientY);
   });
 
   backdrop.addEventListener("pointerdown", (event) => {
