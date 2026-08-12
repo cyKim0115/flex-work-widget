@@ -16,6 +16,7 @@ $InstallDir = Join-Path $env:LOCALAPPDATA "FlexWorkWidget"
 $InstallExe = Join-Path $InstallDir "flex-work-widget.exe"
 $ReleaseExe = Join-Path $Root "src-tauri\target\release\flex-work-widget.exe"
 $ProcessName = "flex-work-widget"
+$LaunchMutexName = "Global\FlexWorkWidgetLaunch"
 
 function Show-Error([string]$Message) {
   Add-Type -AssemblyName PresentationFramework | Out-Null
@@ -54,7 +55,7 @@ function Get-SourceStamp {
       if ($t -gt $latest) { $latest = $t }
     }
   }
-  foreach ($dir in @("src", "src-tauri\src", "src-tauri\capabilities")) {
+  foreach ($dir in @("src", "src-tauri\src", "src-tauri\capabilities", "scripts")) {
     $full = Join-Path $Root $dir
     if (-not (Test-Path $full)) { continue }
     Get-ChildItem $full -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
@@ -69,7 +70,20 @@ function Test-NeedsRebuild {
   if (-not (Test-Path $ReleaseExe)) { return $true }
   $builtAt = (Get-Item $ReleaseExe).LastWriteTimeUtc
   $sourceAt = Get-SourceStamp
-  return $sourceAt -gt $builtAt
+  if ($sourceAt -gt $builtAt) { return $true }
+  if (Test-Path $InstallExe) {
+    $installAt = (Get-Item $InstallExe).LastWriteTimeUtc
+    if ($sourceAt -gt $installAt) { return $true }
+  }
+  return $false
+}
+
+function Test-NeedsInstallRefresh {
+  if (-not (Test-Path $ReleaseExe)) { return $false }
+  if (-not (Test-Path $InstallExe)) { return $true }
+  $releaseHash = (Get-FileHash $ReleaseExe -Algorithm SHA256).Hash
+  $installHash = (Get-FileHash $InstallExe -Algorithm SHA256).Hash
+  return $releaseHash -ne $installHash
 }
 
 function Build-Release {
@@ -97,47 +111,122 @@ function Build-Release {
   }
 }
 
+function Get-RunningWidgets {
+  $byName = @(Get-Process -Name $ProcessName -ErrorAction SilentlyContinue)
+  if ($byName.Count -gt 0) { return $byName }
+  return @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+    $_.Path -and ($_.Path -ieq $InstallExe -or $_.Path -like "*\FlexWorkWidget\flex-work-widget.exe")
+  })
+}
+
 function Stop-RunningWidget {
-  Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | ForEach-Object {
-    Write-Host "실행 중인 위젯 종료 (PID $($_.Id))..."
-    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 400
+  $maxAttempts = 12
+  for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+    $running = Get-RunningWidgets
+    if ($running.Count -eq 0) { return }
+
+    foreach ($proc in $running) {
+      Write-Host "실행 중인 위젯 종료 (PID $($proc.Id))..."
+      Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Milliseconds 500
+  }
+
+  $remaining = Get-RunningWidgets
+  if ($remaining.Count -gt 0) {
+    Show-Error "위젯 프로세스를 종료하지 못했습니다.`n`n작업 관리자에서 flex-work-widget을 모두 종료한 뒤 다시 시도하세요."
+    exit 1
   }
 }
 
-if (Test-NeedsRebuild) {
-  Build-Release
+function Install-ReleaseCopy {
+  New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+  $tmp = Join-Path $InstallDir "flex-work-widget.new.exe"
+  Copy-Item -Force $ReleaseExe $tmp
+  if (Test-Path $InstallExe) {
+    Remove-Item -Force $InstallExe -ErrorAction Stop
+  }
+  Rename-Item -Force $tmp (Split-Path $InstallExe -Leaf)
+
+  $releaseHash = (Get-FileHash $ReleaseExe -Algorithm SHA256).Hash
+  $installHash = (Get-FileHash $InstallExe -Algorithm SHA256).Hash
+  if ($releaseHash -ne $installHash) {
+    Show-Error "설치본 복사 검증에 실패했습니다. 실행 중인 위젯을 모두 종료한 뒤 다시 시도하세요."
+    exit 1
+  }
+  Write-Host "설치 완료: $InstallExe"
 }
 
-if (-not (Test-Path $ReleaseExe)) {
-  Show-Error "Release exe를 찾을 수 없습니다. 먼저 npm run build:app 을 실행하세요."
-  exit 1
+function Start-InstalledWidget {
+  if (-not (Test-Path $InstallExe)) {
+    Show-Error "설치 exe를 찾을 수 없습니다: $InstallExe"
+    exit 1
+  }
+  Start-Process -FilePath $InstallExe
+  Start-Sleep -Seconds 1
+  $count = @(Get-RunningWidgets).Count
+  Write-Host ("Running widgets: {0}" -f $count)
+  if ($count -eq 0) {
+    Show-Error "위젯을 시작하지 못했습니다."
+    exit 1
+  }
 }
 
-Stop-RunningWidget
-
-New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-$tmp = Join-Path $InstallDir "flex-work-widget.new.exe"
-Copy-Item -Force $ReleaseExe $tmp
-if (Test-Path $InstallExe) { Remove-Item -Force $InstallExe }
-Rename-Item -Force $tmp (Split-Path $InstallExe -Leaf)
-Write-Host "설치 완료: $InstallExe"
-
-Remove-Item (Join-Path $InstallDir "icon.ico") -Force -ErrorAction SilentlyContinue
-
+$mutex = New-Object System.Threading.Mutex($false, $LaunchMutexName)
+$mutexAcquired = $false
 try {
-  $desktop = [Environment]::GetFolderPath("Desktop")
-  $lnkPath = Join-Path $desktop "Flex Work Widget.lnk"
-  $w = New-Object -ComObject WScript.Shell
-  $lnk = $w.CreateShortcut($lnkPath)
-  $lnk.TargetPath = $InstallExe
-  $lnk.WorkingDirectory = $InstallDir
-  $lnk.Description = "Flex 오늘 근무시간 위젯"
-  $lnk.IconLocation = "$InstallExe,0"
-  $lnk.Save()
-} catch {
-  # ignore shortcut failures
-}
+  $mutexAcquired = $mutex.WaitOne(0)
+  if (-not $mutexAcquired) {
+    Show-Error "이미 설치 또는 재시작이 진행 중입니다. 잠시 후 다시 시도하세요."
+    exit 1
+  }
 
-Start-Process -FilePath $InstallExe
-exit 0
+  $needsRebuild = Test-NeedsRebuild
+  $needsInstall = Test-NeedsInstallRefresh
+  $willRefresh = $ForceRebuild -or $needsRebuild -or $needsInstall
+
+  if ($willRefresh) {
+    Write-Host "기존 위젯 종료 중..."
+    Stop-RunningWidget
+  }
+
+  if ($needsRebuild) {
+    Build-Release
+  }
+
+  if (-not (Test-Path $ReleaseExe)) {
+    Show-Error "Release exe를 찾을 수 없습니다. 먼저 npm run build:app 을 실행하세요."
+    exit 1
+  }
+
+  if ($willRefresh) {
+    Install-ReleaseCopy
+    Remove-Item (Join-Path $InstallDir "icon.ico") -Force -ErrorAction SilentlyContinue
+    Start-InstalledWidget
+  } elseif (@(Get-RunningWidgets).Count -eq 0) {
+    Start-InstalledWidget
+  } else {
+    Write-Host "최신 설치본이 이미 실행 중입니다."
+  }
+
+  try {
+    $desktop = [Environment]::GetFolderPath("Desktop")
+    $lnkPath = Join-Path $desktop "Flex Work Widget.lnk"
+    $w = New-Object -ComObject WScript.Shell
+    $lnk = $w.CreateShortcut($lnkPath)
+    $lnk.TargetPath = $InstallExe
+    $lnk.WorkingDirectory = $InstallDir
+    $lnk.Description = "Flex 오늘 근무시간 위젯"
+    $lnk.IconLocation = '{0},0' -f $InstallExe
+    $lnk.Save()
+  } catch {
+    # ignore shortcut failures
+  }
+
+  exit 0
+} finally {
+  if ($mutexAcquired) {
+    $mutex.ReleaseMutex() | Out-Null
+  }
+  $mutex.Dispose()
+}

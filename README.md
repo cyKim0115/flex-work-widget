@@ -74,8 +74,9 @@ npm run tauri dev
 
 ## 개발·배포
 
-- 에이전트/개발자 작업 완료 후 강제 재빌드·재시작: `npm run rebuild:restart` 또는 `scripts/rebuild-restart.ps1`
-- 일반 사용자: `시작.bat` (소스가 exe보다 최신일 때만 빌드)
+- 에이전트/개발자 작업 완료 후 강제 재빌드·재시작: `npm run rebuild:restart`
+- 일반 사용자: `시작.bat` (소스가 exe보다 최신일 때만 빌드, 설치본 해시 불일치 시 재복사)
+- 재시작 스크립트는 **빌드 전에** 기존 위젯을 모두 종료한다 (구 UI가 남지 않음)
 
 우클릭 → **종료**로 앱을 닫습니다.
 
