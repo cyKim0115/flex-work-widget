@@ -9,6 +9,7 @@ use install::{
     ensure_installed_release, guard_debug_requires_vite,
 };
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
+use tauri_plugin_window_state::StateFlags;
 
 const SETTINGS_LABEL: &str = "settings";
 use work::{fetch_work, need_login, session_dir, SessionStore, WorkSnapshot};
@@ -214,6 +215,14 @@ pub fn run() {
     let store = SessionStore::new(session_dir());
 
     tauri::Builder::default()
+        // 위치만 복원한다. 창 크기는 메시지 표시 여부에 따라 프런트가 매번 정하므로
+        // (COMPACT ↔ MESSAGE), 크기까지 저장하면 지난 실행 상태가 이번 실행을 덮어쓴다.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(StateFlags::POSITION)
+                .with_denylist(&[SETTINGS_LABEL])
+                .build(),
+        )
         .manage(store)
         .invoke_handler(tauri::generate_handler![
             get_work,
