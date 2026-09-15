@@ -4,10 +4,13 @@ export type ThemeMode = "system" | "light" | "dark";
 export type Preferences = {
   displayMode: DisplayMode;
   theme: ThemeMode;
+  /** Off means the widget behaves like a normal window and can go behind others. */
+  alwaysOnTop: boolean;
 };
 
 export const MODE_KEY = "flex-work-display-mode";
 export const THEME_KEY = "flex-work-theme";
+export const ALWAYS_ON_TOP_KEY = "flex-work-always-on-top";
 
 export function loadDisplayMode(): DisplayMode {
   const raw = localStorage.getItem(MODE_KEY);
@@ -28,16 +31,27 @@ export function saveTheme(theme: ThemeMode) {
   localStorage.setItem(THEME_KEY, theme);
 }
 
+/** The widget shipped always-on-top, so an unset key must stay on. */
+export function loadAlwaysOnTop(): boolean {
+  return localStorage.getItem(ALWAYS_ON_TOP_KEY) !== "false";
+}
+
+export function saveAlwaysOnTop(enabled: boolean) {
+  localStorage.setItem(ALWAYS_ON_TOP_KEY, enabled ? "true" : "false");
+}
+
 export function loadPreferences(): Preferences {
   return {
     displayMode: loadDisplayMode(),
     theme: loadTheme(),
+    alwaysOnTop: loadAlwaysOnTop(),
   };
 }
 
 export function savePreferences(prefs: Preferences) {
   saveDisplayMode(prefs.displayMode);
   saveTheme(prefs.theme);
+  saveAlwaysOnTop(prefs.alwaysOnTop);
 }
 
 export function applyTheme(theme: ThemeMode) {

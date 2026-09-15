@@ -49,6 +49,16 @@ fn close_settings_window(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// The preference lives in the webview, so settings and startup both push it
+/// onto the main window through here instead of each window flipping its own flag.
+#[tauri::command]
+fn set_always_on_top(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    window.set_always_on_top(enabled).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn is_dev_build() -> bool {
     cfg!(debug_assertions)
@@ -220,7 +230,8 @@ pub fn run() {
             open_login_system,
             open_flex_home,
             harvest_login_cookies,
-            harvest_browser_session
+            harvest_browser_session,
+            set_always_on_top
         ])
         .on_window_event(|window, event| {
             if window.label() != SETTINGS_LABEL {

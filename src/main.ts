@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import {
   applyTheme,
+  loadAlwaysOnTop,
   loadDisplayMode,
   loadTheme,
   modeLabel,
@@ -216,6 +217,13 @@ async function refresh() {
 async function boot() {
   const backdrop = $("context-backdrop");
   applyTheme(themeMode);
+  // tauri.conf.json pins the window to always-on-top, so a user who turned it
+  // off in settings gets it restored as soon as the webview boots.
+  try {
+    await invoke("set_always_on_top", { enabled: loadAlwaysOnTop() });
+  } catch {
+    /* browser preview */
+  }
 
   window.addEventListener("contextmenu", (event) => {
     event.preventDefault();

@@ -161,6 +161,17 @@ async function setDisplayMode(mode: DisplayMode) {
   await notifyMain();
 }
 
+async function setAlwaysOnTop(enabled: boolean) {
+  prefs = { ...prefs, alwaysOnTop: enabled };
+  savePreferences(prefs);
+  await invoke("set_always_on_top", { enabled });
+  await notifyMain();
+}
+
+function renderAlwaysOnTop() {
+  ($("always-on-top-toggle") as HTMLInputElement).checked = prefs.alwaysOnTop;
+}
+
 async function setTheme(theme: ThemeMode) {
   prefs = { ...prefs, theme };
   savePreferences(prefs);
@@ -230,6 +241,7 @@ async function refreshView() {
   applyTheme(prefs.theme);
   renderDisplayMode();
   renderTheme();
+  renderAlwaysOnTop();
   await refreshAutostart();
   await refreshConnection();
 }
@@ -304,6 +316,7 @@ async function boot() {
     applyTheme(prefs.theme);
     renderDisplayMode();
     renderTheme();
+    renderAlwaysOnTop();
     await refreshAutostart();
     await refreshConnection();
 
@@ -321,6 +334,18 @@ async function boot() {
     });
     $("btn-open-flex").addEventListener("click", () => {
       void onOpenFlex();
+    });
+
+    const alwaysOnTopToggle = $("always-on-top-toggle") as HTMLInputElement;
+    alwaysOnTopToggle.addEventListener("change", async () => {
+      const enabled = alwaysOnTopToggle.checked;
+      try {
+        await setAlwaysOnTop(enabled);
+        setActionStatus(enabled ? "위젯을 항상 위에 표시합니다." : "위젯을 일반 창처럼 표시합니다.", "ok");
+      } catch (e) {
+        alwaysOnTopToggle.checked = prefs.alwaysOnTop;
+        setActionStatus(tidyMessage(String(e)), "error");
+      }
     });
 
     const autostartToggle = $("autostart-toggle") as HTMLInputElement;
