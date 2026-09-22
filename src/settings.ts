@@ -341,16 +341,36 @@ async function refreshAutostart() {
   syncAutostartUi();
 }
 
+/// 백엔드를 건드리는 갱신 단계. 서로 의존하지 않으므로 한 단계가 실패해도
+/// 나머지는 그대로 갱신돼야 한다. 순차 await 로 묶으면 앞단 하나가 reject 할 때
+/// 뒷단이 통째로 건너뛰어져 UI 가 옛 상태로 남는다.
+const REFRESH_STEPS: { name: string; run: () => Promise<unknown> }[] = [
+  { name: "항상 위 표시", run: renderAlwaysOnTop },
+  { name: "시작프로그램", run: refreshAutostart },
+  { name: "연결 상태", run: refreshConnection },
+  { name: "프로필 목록", run: renderProfilePicker },
+];
+
 async function refreshView() {
   clearActionStatus();
   prefs = loadPreferences();
   applyTheme(prefs.theme);
   renderDisplayMode();
   renderTheme();
-  await renderAlwaysOnTop();
-  await refreshAutostart();
-  await refreshConnection();
-  await renderProfilePicker();
+
+  const results = await Promise.allSettled(REFRESH_STEPS.map((step) => step.run()));
+
+  // 실패를 삼키지 않는다. 콘솔에는 원인을, 상태줄에는 어느 단계인지 남긴다.
+  const failed: string[] = [];
+  results.forEach((result, i) => {
+    if (result.status !== "rejected") return;
+    const { name } = REFRESH_STEPS[i];
+    failed.push(name);
+    console.error(`[settings] ${name} 갱신 실패`, result.reason);
+  });
+  if (failed.length > 0) {
+    setActionStatus(`${failed.join(", ")} 갱신에 실패했습니다. 새로고침을 눌러보세요.`, "error");
+  }
 }
 
 async function closeWindow() {
@@ -421,13 +441,7 @@ async function onOpenFlex() {
 
 async function boot() {
   try {
-    applyTheme(prefs.theme);
-    renderDisplayMode();
-    renderTheme();
-    await renderAlwaysOnTop();
-    await refreshAutostart();
-    await refreshConnection();
-    await renderProfilePicker();
+    await refreshView();
 
     $("profile-select").addEventListener("change", (event) => {
       const value = (event.target as HTMLSelectElement).value;
