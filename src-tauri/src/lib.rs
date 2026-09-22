@@ -50,14 +50,40 @@ fn close_settings_window(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// The preference lives in the webview, so settings and startup both push it
-/// onto the main window through here instead of each window flipping its own flag.
+fn always_on_top_pref_path() -> PathBuf {
+    session_dir().join("ui-pref.json")
+}
+
+/// Backend owns this native window flag so the two webviews can't disagree and
+/// the tauri.conf default can't re-force it on. Shipped on → default true.
+fn load_always_on_top_pref() -> bool {
+    std::fs::read_to_string(always_on_top_pref_path())
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|v| v.get("alwaysOnTop").and_then(|b| b.as_bool()))
+        .unwrap_or(true)
+}
+
+fn save_always_on_top_pref(enabled: bool) -> Result<(), String> {
+    let json = serde_json::json!({ "alwaysOnTop": enabled });
+    let text = serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?;
+    std::fs::write(always_on_top_pref_path(), text).map_err(|e| e.to_string())
+}
+
+/// Apply to the main window AND persist, so the choice survives restarts.
 #[tauri::command]
 fn set_always_on_top(app: AppHandle, enabled: bool) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?;
-    window.set_always_on_top(enabled).map_err(|e| e.to_string())
+    window.set_always_on_top(enabled).map_err(|e| e.to_string())?;
+    save_always_on_top_pref(enabled)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_always_on_top() -> bool {
+    load_always_on_top_pref()
 }
 
 #[tauri::command]
@@ -331,7 +357,8 @@ pub fn run() {
             list_harvest_candidates,
             current_harvest_source,
             set_harvest_preference,
-            set_always_on_top
+            set_always_on_top,
+            get_always_on_top
         ])
         .on_window_event(|window, event| {
             if window.label() != SETTINGS_LABEL {
@@ -342,10 +369,16 @@ pub fn run() {
                 let _ = window.hide();
             }
         })
-        .setup(|_app| {
+        .setup(|app| {
             cleanup_stale_debug_autostart();
             // Release builds keep a stable copy under LOCALAPPDATA for shortcuts/autostart.
             let _ = ensure_installed_release();
+            // Honour the saved always-on-top choice; the conf default only sets the
+            // initial state, so a user who turned it off keeps it off after restart.
+            let enabled = load_always_on_top_pref();
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_always_on_top(enabled);
+            }
             Ok(())
         })
         .run(tauri::generate_context!())

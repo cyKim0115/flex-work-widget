@@ -262,14 +262,20 @@ async function setDisplayMode(mode: DisplayMode) {
 }
 
 async function setAlwaysOnTop(enabled: boolean) {
-  prefs = { ...prefs, alwaysOnTop: enabled };
-  savePreferences(prefs);
+  // Backend persists + applies to the main window; it is the source of truth.
   await invoke("set_always_on_top", { enabled });
-  await notifyMain();
+  prefs = { ...prefs, alwaysOnTop: enabled };
 }
 
-function renderAlwaysOnTop() {
-  ($("always-on-top-toggle") as HTMLInputElement).checked = prefs.alwaysOnTop;
+async function renderAlwaysOnTop() {
+  const toggle = $("always-on-top-toggle") as HTMLInputElement;
+  try {
+    const enabled = await invoke<boolean>("get_always_on_top");
+    prefs = { ...prefs, alwaysOnTop: enabled };
+    toggle.checked = enabled;
+  } catch {
+    toggle.checked = prefs.alwaysOnTop;
+  }
 }
 
 async function setTheme(theme: ThemeMode) {
@@ -341,7 +347,7 @@ async function refreshView() {
   applyTheme(prefs.theme);
   renderDisplayMode();
   renderTheme();
-  renderAlwaysOnTop();
+  await renderAlwaysOnTop();
   await refreshAutostart();
   await refreshConnection();
   await renderProfilePicker();
@@ -418,7 +424,7 @@ async function boot() {
     applyTheme(prefs.theme);
     renderDisplayMode();
     renderTheme();
-    renderAlwaysOnTop();
+    await renderAlwaysOnTop();
     await refreshAutostart();
     await refreshConnection();
     await renderProfilePicker();
