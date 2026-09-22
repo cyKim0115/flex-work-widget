@@ -20,9 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -121,17 +119,14 @@ def browsers() -> list[tuple[str, Path]]:
 def read_profile_cookies(key_path: Path, db_path: Path, domains: list[str]) -> list[dict]:
     from rookiepy import chromium_based
 
-    # Chrome locks Cookies while running — copy first.
-    with tempfile.TemporaryDirectory(prefix="flex-cookies-") as tmp:
-        tmp_db = Path(tmp) / "Cookies"
-        shutil.copy2(db_path, tmp_db)
-        wal = Path(str(db_path) + "-wal")
-        shm = Path(str(db_path) + "-shm")
-        if wal.exists():
-            shutil.copy2(wal, Path(tmp) / "Cookies-wal")
-        if shm.exists():
-            shutil.copy2(shm, Path(tmp) / "Cookies-shm")
-        return list(chromium_based(str(key_path), str(tmp_db), domains) or [])
+    # Read the live Cookies DB directly. rookiepy tolerates the handle Chrome
+    # keeps open while running, so no pre-copy is needed. (An earlier
+    # shutil.copy2 snapshot broke on modern Chrome, which locks Network/Cookies
+    # without share-read and fails any second open with [WinError 32] — a
+    # sharing violation that admin/backup privileges cannot override.) App-bound
+    # encryption on Chrome v130+ still requires this process to run elevated to
+    # decrypt the values.
+    return list(chromium_based(str(key_path), str(db_path), domains) or [])
 
 
 def collect_candidates() -> tuple[list[dict], list[str]]:
