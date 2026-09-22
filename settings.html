@@ -39,6 +39,14 @@
           <button id="btn-login" class="btn secondary wide" type="button">브라우저에서 로그인</button>
           <button id="btn-harvest" class="btn primary wide" type="button">세션 가져오기</button>
         </div>
+        <div id="profile-picker-wrap" class="settings-field settings-field--spaced hidden">
+          <span class="settings-field-label">브라우저·프로필</span>
+          <select id="profile-select" class="settings-select" aria-label="세션 프로필 선택"></select>
+          <p class="settings-hint">
+            flex에 로그인한 프로필이 여러 개면 여기서 고릅니다. 바꾸면 그 프로필로 다시
+            가져오며 UAC 확인이 뜹니다.
+          </p>
+        </div>
         <p id="session-detail" class="settings-detail">상태를 불러오는 중…</p>
       </section>
 

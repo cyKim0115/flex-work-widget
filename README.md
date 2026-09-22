@@ -47,9 +47,10 @@ npm run tauri dev
 1. **브라우저에서 로그인** (Chrome/Edge)
 2. flex 홈까지 로그인 완료
 3. **세션 가져오기**  
-   - Chrome/Edge **모든 프로필**을 최근 사용 순으로 스캔합니다
-   - Chrome v130+ 쿠키 암호 때문에 **관리자 권한(UAC)** 확인이 뜹니다 → 허용
-   - Chrome만 로그인돼 있고 복호화가 막히면 Edge에서 flex.team에 로그인한 뒤 다시 시도하세요
+   - Chrome/Edge **모든 프로필**을 스캔하되, **지금 쓰는 프로필**(Chrome `last_used`)을 최우선으로 선택합니다
+   - Chrome v130+ 쿠키 암호 때문에 **관리자 권한(UAC)** 확인이 뜹니다 → 허용 (관리자 권한이면 Chrome app-bound 암호도 복호화됩니다)
+4. flex에 로그인한 프로필이 여러 개면, 설정의 **브라우저·프로필** 드롭다운에서 원하는 계정을 고릅니다  
+   - 고르면 그 프로필로 다시 가져오며(UAC), 선택은 다음 실행에도 기억됩니다
 
 의존성: `pip install rookiepy` (세션 가져오기 스크립트용)
 
@@ -90,6 +91,7 @@ npm run tauri dev
 ## 개발 메모
 
 - 세션 파일: `%LOCALAPPDATA%\FlexWorkWidget\session.json` (커밋 금지)
+- 프로필 후보 목록: `candidates.json` (쿠키 값 없음, 메타데이터만) / 선택 기억: `harvest-pref.json`
 - 웹뷰 데이터: `%LOCALAPPDATA%\FlexWorkWidget\webview\`
 - 폴링 기본 간격: 60초 (근무 중에는 UI에서 1초 단위로 로컬 틱)
 - Windows WebView2 `cookies_for_url`로 HttpOnly 쿠키까지 읽습니다

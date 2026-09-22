@@ -149,16 +149,66 @@ fn dunce_canonicalize(path: &PathBuf) -> Result<PathBuf, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Import session from Chrome/Edge. UAC prompt expected (Chrome app-bound encryption).
-#[tauri::command]
-fn harvest_browser_session(app: AppHandle, store: State<'_, SessionStore>) -> Result<WorkSnapshot, String> {
+/// One detected flex session (metadata only — no cookie values).
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HarvestCandidate {
+    id: String,
+    browser: String,
+    profile: String,
+    account: String,
+    #[serde(default)]
+    is_last_used: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct HarvestPref {
+    id: Option<String>,
+}
+
+fn pref_path() -> PathBuf {
+    session_dir().join("harvest-pref.json")
+}
+
+fn load_harvest_pref() -> Option<String> {
+    let raw = std::fs::read_to_string(pref_path()).ok()?;
+    let pref: HarvestPref = serde_json::from_str(&raw).ok()?;
+    pref.id.filter(|s| !s.is_empty())
+}
+
+fn save_harvest_pref(id: &str) -> Result<(), String> {
+    let pref = HarvestPref {
+        id: Some(id.to_string()),
+    };
+    let json = serde_json::to_string_pretty(&pref).map_err(|e| e.to_string())?;
+    std::fs::write(pref_path(), json).map_err(|e| e.to_string())
+}
+
+/// PowerShell `-ArgumentList` wants a comma-separated list of quoted strings.
+fn harvest_arglist(script: &str, prefer: Option<&str>) -> String {
+    let mut parts = vec![ps_quote(script)];
+    if let Some(p) = prefer {
+        parts.push(ps_quote("--prefer"));
+        parts.push(ps_quote(p));
+    }
+    parts.join(",")
+}
+
+/// Run the elevated cookie harvester, optionally preferring a specific profile,
+/// then load session.json into the store. UAC prompt is expected (Chrome
+/// app-bound encryption needs admin to decrypt on v130+).
+fn run_harvest(
+    app: &AppHandle,
+    store: &State<'_, SessionStore>,
+    prefer: Option<&str>,
+) -> Result<WorkSnapshot, String> {
     let script = project_harvest_script().ok_or_else(|| {
         "harvest_browser_session.py 를 찾지 못했습니다. 프로젝트 루트에서 실행하세요.".to_string()
     })?;
     let script = dunce_canonicalize(&script)?;
     let python = dunce_canonicalize(&python_launcher()).unwrap_or_else(|_| python_launcher());
 
-    let arg_list = ps_quote(&script.to_string_lossy());
+    let arg_list = harvest_arglist(&script.to_string_lossy(), prefer);
     let file = ps_quote(&python.to_string_lossy());
     let ps = format!(
         "$p = Start-Process -FilePath {file} -ArgumentList {arg_list} -Verb RunAs -Wait -PassThru; if ($null -eq $p) {{ exit 1 }}; exit $p.ExitCode"
@@ -189,14 +239,52 @@ fn harvest_browser_session(app: AppHandle, store: State<'_, SessionStore>) -> Re
         return Ok(snap);
     }
     store.save(tokens)?;
-    let snap = fetch_work(&store);
+    let snap = fetch_work(store);
     let _ = app.emit("work-updated", &snap);
     Ok(snap)
+}
+
+/// Import session from Chrome/Edge, honouring a saved profile preference.
+#[tauri::command]
+fn harvest_browser_session(app: AppHandle, store: State<'_, SessionStore>) -> Result<WorkSnapshot, String> {
+    let prefer = load_harvest_pref();
+    run_harvest(&app, &store, prefer.as_deref())
 }
 
 #[tauri::command]
 fn harvest_login_cookies(app: AppHandle, store: State<'_, SessionStore>) -> Result<WorkSnapshot, String> {
     harvest_browser_session(app, store)
+}
+
+/// Detected flex sessions from the most recent harvest, best-ranked first.
+#[tauri::command]
+fn list_harvest_candidates() -> Vec<HarvestCandidate> {
+    let path = session_dir().join("candidates.json");
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// Which profile the last harvest actually used (session.json `source`).
+#[tauri::command]
+fn current_harvest_source() -> Option<String> {
+    let raw = std::fs::read_to_string(session_dir().join("session.json")).ok()?;
+    let val: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    val.get("source")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Remember the chosen browser/profile and re-harvest from it (UAC prompt).
+#[tauri::command]
+fn set_harvest_preference(
+    app: AppHandle,
+    store: State<'_, SessionStore>,
+    id: String,
+) -> Result<WorkSnapshot, String> {
+    save_harvest_pref(&id)?;
+    run_harvest(&app, &store, Some(&id))
 }
 
 #[tauri::command]
@@ -240,6 +328,9 @@ pub fn run() {
             open_flex_home,
             harvest_login_cookies,
             harvest_browser_session,
+            list_harvest_candidates,
+            current_harvest_source,
+            set_harvest_preference,
             set_always_on_top
         ])
         .on_window_event(|window, event| {

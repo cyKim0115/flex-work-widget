@@ -558,6 +558,32 @@ body {
   cursor: not-allowed;
 }
 
+.settings-select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: #e8eaed;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.settings-select:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.settings-select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.settings-select option {
+  color: #16181c;
+}
+
 .settings-window-body {
   overflow-y: auto;
 }

@@ -89,6 +89,105 @@ async function pushWorkToMain(snap: WorkSnapshot) {
   await emit("work-updated", snap);
 }
 
+type HarvestCandidate = {
+  id: string;
+  browser: string;
+  profile: string;
+  account: string;
+  isLastUsed: boolean;
+};
+
+function browserLabel(browser: string): string {
+  switch (browser) {
+    case "chrome":
+      return "Chrome";
+    case "edge":
+      return "Edge";
+    case "brave":
+      return "Brave";
+    case "chromium":
+      return "Chromium";
+    default:
+      return browser;
+  }
+}
+
+async function loadCandidates(): Promise<HarvestCandidate[]> {
+  try {
+    return await invoke<HarvestCandidate[]>("list_harvest_candidates");
+  } catch {
+    return [];
+  }
+}
+
+async function loadCurrentSource(): Promise<string | null> {
+  try {
+    return await invoke<string | null>("current_harvest_source");
+  } catch {
+    return null;
+  }
+}
+
+/// Show the browser/profile chooser only when a harvest has detected sessions.
+async function renderProfilePicker() {
+  const wrap = $("profile-picker-wrap");
+  const select = $("profile-select") as HTMLSelectElement;
+  const [candidates, current] = await Promise.all([loadCandidates(), loadCurrentSource()]);
+
+  if (candidates.length === 0) {
+    wrap.classList.add("hidden");
+    return;
+  }
+
+  wrap.classList.remove("hidden");
+  select.replaceChildren();
+
+  const auto = document.createElement("option");
+  auto.value = "";
+  auto.textContent = "자동 (최근 사용 브라우저)";
+  select.append(auto);
+
+  let matched = false;
+  for (const cand of candidates) {
+    const opt = document.createElement("option");
+    opt.value = cand.id;
+    const usedNote = cand.isLastUsed ? " · 최근 사용" : "";
+    opt.textContent = `${browserLabel(cand.browser)} · ${cand.account}${usedNote}`;
+    if (current && cand.id === current) {
+      opt.selected = true;
+      matched = true;
+    }
+    select.append(opt);
+  }
+  if (!matched) auto.selected = true;
+}
+
+async function onProfileChange(id: string) {
+  clearActionStatus();
+  const select = $("profile-select") as HTMLSelectElement;
+  select.disabled = true;
+  setActionStatus(
+    id
+      ? "선택한 프로필로 다시 가져오는 중… UAC 창이 뜨면 허용해주세요."
+      : "자동으로 다시 가져오는 중… UAC 창이 뜨면 허용해주세요.",
+  );
+  try {
+    const snap = await invoke<WorkSnapshot>("set_harvest_preference", { id });
+    renderConnection(snap);
+    await pushWorkToMain(snap);
+    await renderProfilePicker();
+    if (snap.state === "NeedLogin" || snap.state === "FetchError") {
+      setActionStatus(tidyMessage(snap.error || snap.label || "세션 가져오기 실패"), "error");
+    } else {
+      setActionStatus("선택한 프로필로 세션을 다시 가져왔습니다.", "ok");
+    }
+  } catch (e) {
+    setActionStatus(tidyMessage(String(e)), "error");
+  } finally {
+    select.disabled = false;
+  }
+}
+
 async function refreshConnection() {
   try {
     const snap = await fetchWork();
@@ -244,6 +343,7 @@ async function refreshView() {
   renderAlwaysOnTop();
   await refreshAutostart();
   await refreshConnection();
+  await renderProfilePicker();
 }
 
 async function closeWindow() {
@@ -269,6 +369,7 @@ async function onHarvest() {
     const snap = await invoke<WorkSnapshot>("harvest_browser_session");
     renderConnection(snap);
     await pushWorkToMain(snap);
+    await renderProfilePicker();
     if (snap.state === "NeedLogin" || snap.state === "FetchError") {
       setActionStatus(
         tidyMessage(snap.error || snap.label || "세션 가져오기 실패") +
@@ -319,6 +420,12 @@ async function boot() {
     renderAlwaysOnTop();
     await refreshAutostart();
     await refreshConnection();
+    await renderProfilePicker();
+
+    $("profile-select").addEventListener("change", (event) => {
+      const value = (event.target as HTMLSelectElement).value;
+      void onProfileChange(value);
+    });
 
     $("btn-close").addEventListener("click", () => {
       void closeWindow();
