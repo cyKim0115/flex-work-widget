@@ -134,7 +134,8 @@ async function renderProfilePicker() {
   const select = $("profile-select") as HTMLSelectElement;
   const [candidates, current] = await Promise.all([loadCandidates(), loadCurrentSource()]);
 
-  if (candidates.length === 0) {
+  // Only worth choosing when flex is logged into more than one profile.
+  if (candidates.length <= 1) {
     wrap.classList.add("hidden");
     return;
   }
