@@ -85,6 +85,12 @@ body {
   height: 100vh;
 }
 
+/* 전역 유틸. 요소별 `.x.hidden` 규칙을 따로 두면 새 마크업에서 빠뜨리기 쉬워
+   (브라우저·프로필 선택이 실제로 그랬다) 한곳에서만 정의한다. */
+.hidden {
+  display: none !important;
+}
+
 .widget {
   height: 100%;
   padding: 12px 14px 10px;
@@ -193,10 +199,6 @@ body {
   z-index: 999;
 }
 
-.context-backdrop.hidden {
-  display: none;
-}
-
 .context-menu {
   position: fixed;
   min-width: 200px;
@@ -211,10 +213,6 @@ body {
   flex-direction: column;
   gap: 2px;
   z-index: 1000;
-}
-
-.context-menu.hidden {
-  display: none;
 }
 
 .menu-item {
@@ -297,10 +295,6 @@ body {
   margin: 0 4px 2px 10px;
 }
 
-.menu-group-items.hidden {
-  display: none;
-}
-
 .menu-item.menu-sub {
   padding: 7px 10px;
   font-size: 12px;
@@ -322,10 +316,6 @@ body {
   justify-content: center;
   padding: 10px;
   background: rgba(0, 0, 0, 0.35);
-}
-
-.msg-backdrop.hidden {
-  display: none;
 }
 
 .msg-card {
@@ -454,10 +444,6 @@ body {
   border-color: rgba(248, 113, 113, 0.35);
   background: rgba(248, 113, 113, 0.1);
   color: #fecaca;
-}
-
-.settings-status.hidden {
-  display: none;
 }
 
 .settings-card {
@@ -622,10 +608,6 @@ body {
 
 .settings-hint--error {
   color: #f87171;
-}
-
-.settings-hint.hidden {
-  display: none;
 }
 
 .option-picker {
