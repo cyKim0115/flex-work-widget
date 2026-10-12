@@ -1,8 +1,10 @@
+mod browser_login;
 mod install;
+mod secure_store;
 mod work;
 
 use std::path::PathBuf;
-use std::process::Command;
+use std::sync::Arc;
 
 use install::{
     autostart_disable, autostart_enable, autostart_is_enabled, cleanup_stale_debug_autostart,
@@ -12,11 +14,13 @@ use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri_plugin_window_state::StateFlags;
 
 const SETTINGS_LABEL: &str = "settings";
-use work::{fetch_work, need_login, session_dir, SessionStore, WorkSnapshot};
+use work::{
+    fetch_work, fetch_work_with_refresh, need_login, session_dir, SessionStore, WorkSnapshot,
+    FLEX_LOGIN, LOGIN_HINT,
+};
 
 const POLL_INTERVAL_MS: u64 = 60_000;
 const FLEX_HOME: &str = "https://flex.team/home";
-const FLEX_LOGIN: &str = "https://flex.team/auth/login?nextUrl=%2Fhome";
 
 #[tauri::command]
 fn get_poll_interval_ms() -> u64 {
@@ -116,209 +120,94 @@ fn open_flex_home() -> Result<(), String> {
     open::that(FLEX_HOME).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-fn open_login_system() -> Result<(), String> {
-    open::that(FLEX_LOGIN).map_err(|e| e.to_string())
-}
-
-/// WebView2 login is blank on flex — always use the system browser.
-#[tauri::command]
-fn open_login() -> Result<(), String> {
-    open_login_system()
-}
-
-fn project_harvest_script() -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            candidates.push(parent.join("../../../scripts/harvest_browser_session.py"));
-            candidates.push(parent.join("../../scripts/harvest_browser_session.py"));
-        }
-    }
-    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/harvest_browser_session.py"));
-    if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join("scripts/harvest_browser_session.py"));
-        candidates.push(cwd.join("../scripts/harvest_browser_session.py"));
-    }
-    candidates.into_iter().find(|p| p.is_file())
-}
-
-fn python_launcher() -> PathBuf {
-    which_bin("python").unwrap_or_else(|| PathBuf::from("python"))
-}
-
-fn which_bin(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path) {
-        let candidate = dir.join(format!("{name}.exe"));
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
-}
-
-fn ps_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
-}
-
-fn dunce_canonicalize(path: &PathBuf) -> Result<PathBuf, String> {
-    std::fs::canonicalize(path)
-        .map(|p| {
-            let s = p.to_string_lossy();
-            if let Some(stripped) = s.strip_prefix(r"\\?\") {
-                PathBuf::from(stripped)
-            } else {
-                p
-            }
-        })
+/// 블로킹 작업(HTTP, Chrome 실행)을 메인 스레드 밖에서 돌린다.
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
         .map_err(|e| e.to_string())
 }
 
-/// One detected flex session (metadata only — no cookie values).
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct HarvestCandidate {
-    id: String,
-    browser: String,
-    profile: String,
-    account: String,
-    #[serde(default)]
-    is_last_used: bool,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Default)]
-struct HarvestPref {
-    id: Option<String>,
-}
-
-fn pref_path() -> PathBuf {
-    session_dir().join("harvest-pref.json")
-}
-
-fn load_harvest_pref() -> Option<String> {
-    let raw = std::fs::read_to_string(pref_path()).ok()?;
-    let pref: HarvestPref = serde_json::from_str(&raw).ok()?;
-    pref.id.filter(|s| !s.is_empty())
-}
-
-fn save_harvest_pref(id: &str) -> Result<(), String> {
-    let pref = HarvestPref {
-        id: Some(id.to_string()),
-    };
-    let json = serde_json::to_string_pretty(&pref).map_err(|e| e.to_string())?;
-    std::fs::write(pref_path(), json).map_err(|e| e.to_string())
-}
-
-/// PowerShell `-ArgumentList` wants a comma-separated list of quoted strings.
-fn harvest_arglist(script: &str, prefer: Option<&str>) -> String {
-    let mut parts = vec![ps_quote(script)];
-    if let Some(p) = prefer {
-        parts.push(ps_quote("--prefer"));
-        parts.push(ps_quote(p));
-    }
-    parts.join(",")
-}
-
-/// Run the elevated cookie harvester, optionally preferring a specific profile,
-/// then load session.json into the store. UAC prompt is expected (Chrome
-/// app-bound encryption needs admin to decrypt on v130+).
-fn run_harvest(
-    app: &AppHandle,
-    store: &State<'_, SessionStore>,
-    prefer: Option<&str>,
+/// 위젯 전용 Chrome 창을 띄워 사용자가 직접 로그인하게 하고, 확인되면 세션을 봉인 저장한다.
+#[tauri::command]
+async fn login_with_browser(
+    app: AppHandle,
+    store: State<'_, Arc<SessionStore>>,
 ) -> Result<WorkSnapshot, String> {
-    let script = project_harvest_script().ok_or_else(|| {
-        "harvest_browser_session.py 를 찾지 못했습니다. 프로젝트 루트에서 실행하세요.".to_string()
-    })?;
-    let script = dunce_canonicalize(&script)?;
-    let python = dunce_canonicalize(&python_launcher()).unwrap_or_else(|_| python_launcher());
-
-    let arg_list = harvest_arglist(&script.to_string_lossy(), prefer);
-    let file = ps_quote(&python.to_string_lossy());
-    let ps = format!(
-        "$p = Start-Process -FilePath {file} -ArgumentList {arg_list} -Verb RunAs -Wait -PassThru; if ($null -eq $p) {{ exit 1 }}; exit $p.ExitCode"
-    );
-
-    let status = Command::new("powershell")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &ps])
-        .status()
-        .map_err(|e| format!("관리자 권한 실행 실패: {e}"))?;
-
-    let err_path = session_dir().join("session-error.txt");
-    if !status.success() {
-        let detail = std::fs::read_to_string(&err_path).unwrap_or_else(|_| {
-            "Chrome/Edge 쿠키를 읽지 못했습니다. UAC 허용 여부 / flex.team 로그인 상태를 확인하세요.".into()
-        });
-        let snap = need_login(detail);
-        let _ = app.emit("work-updated", &snap);
-        return Ok(snap);
-    }
-
-    let path = session_dir().join("session.json");
-    let raw = std::fs::read_to_string(&path).map_err(|e| format!("session.json 읽기 실패: {e}"))?;
-    let tokens: work::SessionTokens =
-        serde_json::from_str(&raw).map_err(|e| format!("session.json 파싱 실패: {e}"))?;
-    if tokens.aid.is_empty() && tokens.ws_aid.is_empty() {
-        let snap = need_login("세션 파일에 AID 쿠키가 없습니다".into());
-        let _ = app.emit("work-updated", &snap);
-        return Ok(snap);
-    }
-    store.save(tokens)?;
-    let snap = fetch_work(store);
+    let store = store.inner().clone();
+    let emitter = app.clone();
+    let snap = blocking(move || {
+        let progress = |msg: &str| {
+            let _ = emitter.emit("login-progress", msg);
+        };
+        let session = browser_login::login(&FLEX_LOGIN, &progress).map_err(|e| e.to_string())?;
+        store.save(session)?;
+        Ok::<_, String>(fetch_work(&store))
+    })
+    .await??;
     let _ = app.emit("work-updated", &snap);
     Ok(snap)
 }
 
-/// Import session from Chrome/Edge, honouring a saved profile preference.
-#[tauri::command]
-fn harvest_browser_session(app: AppHandle, store: State<'_, SessionStore>) -> Result<WorkSnapshot, String> {
-    let prefer = load_harvest_pref();
-    run_harvest(&app, &store, prefer.as_deref())
+/// 설정 창 상태 줄용. 쿠키 값은 내보내지 않는다.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoginInfo {
+    connected: bool,
+    account: Option<String>,
+    saved_at_ms: Option<i64>,
+    expires_at_ms: Option<i64>,
+    has_profile: bool,
+    browser_found: bool,
 }
 
 #[tauri::command]
-fn harvest_login_cookies(app: AppHandle, store: State<'_, SessionStore>) -> Result<WorkSnapshot, String> {
-    harvest_browser_session(app, store)
+async fn get_login_info(store: State<'_, Arc<SessionStore>>) -> Result<LoginInfo, String> {
+    let session = store.get();
+    blocking(move || LoginInfo {
+        connected: session.is_some(),
+        account: session
+            .as_ref()
+            .and_then(|s| s.account.as_ref())
+            .and_then(|a| a.label.clone()),
+        saved_at_ms: session.as_ref().map(|s| s.saved_at_ms),
+        expires_at_ms: session
+            .as_ref()
+            .and_then(|s| s.expires_at_ms(FLEX_LOGIN.key_cookie)),
+        has_profile: browser_login::profile_dir(&FLEX_LOGIN).is_dir(),
+        browser_found: browser_login::find_browser(&FLEX_LOGIN).is_some(),
+    })
+    .await
 }
 
-/// Detected flex sessions from the most recent harvest, best-ranked first.
+/// 저장 세션만 지운다. 전용 프로필의 로그인은 남아 다음 로그인이 대개 클릭 한 번이다.
 #[tauri::command]
-fn list_harvest_candidates() -> Vec<HarvestCandidate> {
-    let path = session_dir().join("candidates.json");
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
-}
-
-/// Which profile the last harvest actually used (session.json `source`).
-#[tauri::command]
-fn current_harvest_source() -> Option<String> {
-    let raw = std::fs::read_to_string(session_dir().join("session.json")).ok()?;
-    let val: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    val.get("source")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-}
-
-/// Remember the chosen browser/profile and re-harvest from it (UAC prompt).
-#[tauri::command]
-fn set_harvest_preference(
+async fn disconnect_session(
     app: AppHandle,
-    store: State<'_, SessionStore>,
-    id: String,
+    store: State<'_, Arc<SessionStore>>,
 ) -> Result<WorkSnapshot, String> {
-    save_harvest_pref(&id)?;
-    run_harvest(&app, &store, Some(&id))
+    store.clear()?;
+    let snap = need_login(LOGIN_HINT.into());
+    let _ = app.emit("work-updated", &snap);
+    Ok(snap)
+}
+
+/// 전용 프로필 폴더와 저장 세션을 모두 지운다.
+#[tauri::command]
+async fn reset_login_profile(
+    app: AppHandle,
+    store: State<'_, Arc<SessionStore>>,
+) -> Result<WorkSnapshot, String> {
+    blocking(|| browser_login::reset_profile(&FLEX_LOGIN)).await??;
+    store.clear()?;
+    let snap = need_login(LOGIN_HINT.into());
+    let _ = app.emit("work-updated", &snap);
+    Ok(snap)
 }
 
 #[tauri::command]
-fn get_work(_app: AppHandle, store: State<'_, SessionStore>) -> WorkSnapshot {
-    match store.get() {
-        None => need_login("1) 브라우저 로그인  2) 세션 가져오기".into()),
-        Some(_) => fetch_work(&store),
-    }
+async fn get_work(store: State<'_, Arc<SessionStore>>) -> Result<WorkSnapshot, String> {
+    let store = store.inner().clone();
+    blocking(move || fetch_work_with_refresh(&store)).await
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -326,7 +215,7 @@ pub fn run() {
     guard_debug_requires_vite();
 
     let _ = std::fs::create_dir_all(session_dir());
-    let store = SessionStore::new(session_dir());
+    let store = Arc::new(SessionStore::new());
 
     tauri::Builder::default()
         // 위치만 복원한다. 창 크기는 메시지 표시 여부에 따라 프런트가 매번 정하므로
@@ -349,14 +238,11 @@ pub fn run() {
             disable_autostart,
             is_autostart_enabled,
             install_release_copy,
-            open_login,
-            open_login_system,
             open_flex_home,
-            harvest_login_cookies,
-            harvest_browser_session,
-            list_harvest_candidates,
-            current_harvest_source,
-            set_harvest_preference,
+            login_with_browser,
+            get_login_info,
+            disconnect_session,
+            reset_login_profile,
             set_always_on_top,
             get_always_on_top
         ])

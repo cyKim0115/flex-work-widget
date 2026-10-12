@@ -6,9 +6,37 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::browser_login::{self, cookie_value, Account, Cookie, LoginSpec, StoredSession};
+
 const FLEX_ORIGIN: &str = "https://flex.team";
 const ME_PATH: &str = "/api/v2/workspace/users/me/workspace-users";
 const STATUS_PATH: &str = "/api/v2/time-tracking/work-clock/users/{userIdHash}/current-status";
+/// 요청에 싣는 쿠키. 실측(2026-10-12): 인증은 AID(7일)로 되고 V2_WS_AID(12시간) 단독은 401.
+/// V2_WS_RID 는 새 로그인에서 생기지 않았지만 있으면 예전처럼 함께 보낸다.
+const AUTH_COOKIES: &[&str] = &["AID", "V2_WS_AID", "V2_WS_RID"];
+pub const LOGIN_HINT: &str = "우클릭 → 설정 → 브라우저로 로그인";
+
+/// flex 전용 로그인 설정. 공통 로그인 모듈(browser_login.rs)에 넘기는 서비스별 값은 여기뿐이다.
+pub const FLEX_LOGIN: LoginSpec = LoginSpec {
+    app_dir: "FlexWorkWidget",
+    login_url: "https://flex.team/",
+    home_url: "https://flex.team/home",
+    cookie_domain: "flex.team",
+    // 옛 하베스트 조건과 같다. 실제로 통하는지는 validate 가 가린다.
+    required_cookies: &["AID", "V2_WS_AID"],
+    key_cookie: "AID",
+    refresh_margin: Duration::from_secs(24 * 60 * 60),
+    browser_env: "FLEX_BROWSER_PATH",
+    validate: validate_flex,
+};
+
+/// 옛 rookiepy 하베스트가 남긴 파일. 평문 쿠키·계정 이름이 들어 있어 새 세션 저장에 성공하면 지운다.
+const LEGACY_FILES: &[&str] = &[
+    "session.json",
+    "candidates.json",
+    "harvest-pref.json",
+    "session-error.txt",
+];
 
 #[derive(Debug, Error)]
 pub enum WorkError {
@@ -29,16 +57,6 @@ pub struct WorkSnapshot {
     pub started_at: Option<String>,
     pub error: Option<String>,
     pub fetched_at_ms: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionTokens {
-    pub aid: String,
-    pub ws_aid: String,
-    pub ws_rid: String,
-    pub user_id_hash: Option<String>,
-    pub updated_at_ms: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,93 +108,144 @@ struct RestRecord {
     rest_stop_record: Option<ClockEvent>,
 }
 
+/// DPAPI 봉인 세션(`session.dat`)의 메모리 사본. 디스크 쓰기는 `save`/`clear`에서만 한다.
 pub struct SessionStore {
-    path: PathBuf,
-    tokens: Mutex<Option<SessionTokens>>,
+    session: Mutex<Option<StoredSession>>,
 }
 
 impl SessionStore {
-    pub fn new(app_data: PathBuf) -> Self {
-        let path = app_data.join("session.json");
-        let tokens = read_session(&path);
+    pub fn new() -> Self {
         Self {
-            path,
-            tokens: Mutex::new(tokens),
+            session: Mutex::new(browser_login::load_session(&FLEX_LOGIN)),
         }
     }
 
-    pub fn get(&self) -> Option<SessionTokens> {
-        self.tokens.lock().ok().and_then(|g| g.clone())
+    pub fn get(&self) -> Option<StoredSession> {
+        self.session.lock().ok().and_then(|g| g.clone())
     }
 
-    pub fn save(&self, tokens: SessionTokens) -> Result<(), String> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    pub fn save(&self, session: StoredSession) -> Result<(), String> {
+        browser_login::save_session(&FLEX_LOGIN, &session)?;
+        remove_legacy_files();
+        if let Ok(mut guard) = self.session.lock() {
+            *guard = Some(session);
         }
-        let json = serde_json::to_string_pretty(&tokens).map_err(|e| e.to_string())?;
-        fs::write(&self.path, json).map_err(|e| e.to_string())?;
-        if let Ok(mut guard) = self.tokens.lock() {
-            *guard = Some(tokens);
+        Ok(())
+    }
+
+    /// "연결 해제". 다음 조회부터 `NeedLogin`.
+    pub fn clear(&self) -> Result<(), String> {
+        browser_login::clear_session(&FLEX_LOGIN)?;
+        if let Ok(mut guard) = self.session.lock() {
+            *guard = None;
         }
         Ok(())
     }
 }
 
-fn read_session(path: &PathBuf) -> Option<SessionTokens> {
-    let raw = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&raw).ok()
+fn remove_legacy_files() {
+    let dir = session_dir();
+    for name in LEGACY_FILES {
+        let _ = fs::remove_file(dir.join(name));
+    }
 }
 
 pub fn session_dir() -> PathBuf {
-    let base = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    base.join("FlexWorkWidget")
+    browser_login::app_dir(&FLEX_LOGIN)
 }
 
-fn cookie_header(tokens: &SessionTokens) -> String {
-    format!(
-        "AID={}; V2_WS_AID={}; V2_WS_RID={}",
-        tokens.aid, tokens.ws_aid, tokens.ws_rid
-    )
+fn cookie_header(cookies: &[Cookie]) -> String {
+    AUTH_COOKIES
+        .iter()
+        .filter_map(|name| cookie_value(cookies, name).map(|v| format!("{name}={v}")))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn flex_aid(cookies: &[Cookie]) -> Option<&str> {
+    cookie_value(cookies, "AID").or_else(|| cookie_value(cookies, "V2_WS_AID"))
 }
 
 fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(10))
         .timeout_read(Duration::from_secs(30))
+        // 쿠키가 다른 호스트로 따라가지 않게 리디렉션을 따르지 않는다.
+        .redirects(0)
         .build()
 }
 
-fn get_json(tokens: &SessionTokens, path: &str) -> Result<serde_json::Value, WorkError> {
+/// 오류 문구에는 상태 코드만 남긴다(응답 본문·쿠키 값 금지).
+fn get_json(cookies: &[Cookie], path: &str) -> Result<serde_json::Value, WorkError> {
+    let aid = flex_aid(cookies).ok_or_else(|| WorkError::NeedLogin("로그인 쿠키가 없습니다".into()))?;
     let url = format!("{FLEX_ORIGIN}{path}");
-    let aid = if !tokens.aid.is_empty() {
-        tokens.aid.clone()
-    } else {
-        tokens.ws_aid.clone()
-    };
     let resp = agent()
         .get(&url)
         .set("Origin", FLEX_ORIGIN)
         .set("Referer", &format!("{FLEX_ORIGIN}/home"))
         .set("Accept", "application/json")
         .set("User-Agent", "flex-work-widget/0.1")
-        .set("Cookie", &cookie_header(tokens))
-        .set("x-flex-aid", &aid)
+        .set("Cookie", &cookie_header(cookies))
+        .set("x-flex-aid", aid)
         .set("FlexTeam-Version", "V2")
         .call()
         .map_err(|e| match e {
-            ureq::Error::Status(401, _) | ureq::Error::Status(403, _) => {
-                WorkError::NeedLogin(format!("auth failed: {e}"))
+            ureq::Error::Status(code @ (401 | 403), _) => {
+                WorkError::NeedLogin(format!("인증이 만료됐습니다 (HTTP {code})"))
             }
-            other => WorkError::Fetch(other.to_string()),
+            ureq::Error::Status(code, _) => WorkError::Fetch(format!("HTTP {code}")),
+            ureq::Error::Transport(t) => WorkError::Fetch(t.kind().to_string()),
         })?;
 
+    // 리디렉션은 로그인 페이지로 보내는 경우다.
+    if (300..400).contains(&resp.status()) {
+        return Err(WorkError::NeedLogin(format!(
+            "인증이 만료됐습니다 (HTTP {})",
+            resp.status()
+        )));
+    }
     resp.into_json::<serde_json::Value>()
         .map_err(|e| WorkError::Parse(e.to_string()))
 }
 
+/// `LoginSpec.validate`: workspace-users 200 + userIdHash. 계정 표시는 이름 · 회사(이메일은 쓰지 않는다).
+fn validate_flex(cookies: &[Cookie]) -> Result<Account, String> {
+    let val = get_json(cookies, ME_PATH).map_err(|e| e.to_string())?;
+    let user_id = extract_user_id_hash(&val).ok_or("userIdHash를 찾지 못했습니다")?;
+    Ok(Account {
+        label: account_label(&val),
+        user_id: Some(user_id),
+    })
+}
+
+fn account_label(val: &serde_json::Value) -> Option<String> {
+    let current = val.get("currentUser")?;
+    let user = current.get("user");
+    let name = user
+        .and_then(|u| u.get("displayName").or_else(|| u.get("name")))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    let company = current
+        .get("customer")
+        .and_then(|c| c.get("name"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    match (name, company) {
+        (Some(n), Some(c)) => Some(format!("{n} · {c}")),
+        (Some(n), None) => Some(n.to_string()),
+        (None, Some(c)) => Some(c.to_string()),
+        (None, None) => None,
+    }
+}
+
 fn extract_user_id_hash(val: &serde_json::Value) -> Option<String> {
+    // 현재 응답: { currentUser: { user: { userIdHash } }, users: [...] }
+    if let Some(h) = val
+        .pointer("/currentUser/user/userIdHash")
+        .and_then(|v| v.as_str())
+    {
+        return Some(h.to_string());
+    }
     // Common shapes: { workspaceUsers: [...] } or { data: [...] } or bare array
     let users = val
         .get("workspaceUsers")
@@ -401,7 +470,7 @@ fn compute_from_packs(packs: &[WorkClockPack]) -> WorkSnapshot {
         };
     }
 
-    if any_finished || worked_seconds.unwrap_or(0) > 0 {
+    if any_finished || worked_ms > 0 {
         return WorkSnapshot {
             state: "Done".into(),
             worked_seconds,
@@ -546,23 +615,19 @@ pub fn fetch_error(message: String) -> WorkSnapshot {
     }
 }
 
+/// 저장된 세션으로 한 번 조회한다. 갱신은 하지 않는다.
 pub fn fetch_work(store: &SessionStore) -> WorkSnapshot {
-    let Some(mut tokens) = store.get() else {
-        return need_login("세션 없음".into());
+    let Some(mut session) = store.get() else {
+        return need_login(LOGIN_HINT.into());
     };
 
-    if tokens.aid.is_empty() && tokens.ws_aid.is_empty() {
-        return need_login("세션 토큰 없음".into());
-    }
-
-    let user_id = if let Some(h) = tokens.user_id_hash.clone() {
-        h
-    } else {
-        match get_json(&tokens, ME_PATH) {
+    let user_id = match session.account.as_ref().and_then(|a| a.user_id.clone()) {
+        Some(h) => h,
+        None => match get_json(&session.cookies, ME_PATH) {
             Ok(val) => match extract_user_id_hash(&val) {
                 Some(h) => {
-                    tokens.user_id_hash = Some(h.clone());
-                    let _ = store.save(tokens.clone());
+                    session.account.get_or_insert_with(Account::default).user_id = Some(h.clone());
+                    let _ = store.save(session.clone());
                     h
                 }
                 None => {
@@ -571,15 +636,41 @@ pub fn fetch_work(store: &SessionStore) -> WorkSnapshot {
             },
             Err(WorkError::NeedLogin(m)) => return need_login(m),
             Err(e) => return fetch_error(e.to_string()),
-        }
+        },
     };
 
     let path = STATUS_PATH.replace("{userIdHash}", &urlencoding_loose(&user_id));
-    match get_json(&tokens, &path) {
+    match get_json(&session.cookies, &path) {
         Ok(val) => parse_status_value(&val),
         Err(WorkError::NeedLogin(m)) => need_login(m),
         Err(e) => fetch_error(e.to_string()),
     }
+}
+
+/// 위젯 폴링 경로. 핵심 쿠키 만료가 임박하면 미리, 401/403이면 한 번 무인 갱신(headless)한 뒤 다시 조회한다.
+/// 갱신은 Chrome을 띄우므로 블로킹 스레드에서 부른다.
+pub fn fetch_work_with_refresh(store: &SessionStore) -> WorkSnapshot {
+    let Some(session) = store.get() else {
+        return need_login(LOGIN_HINT.into());
+    };
+    if let Some(fresh) = browser_login::refresh_if_expiring(&FLEX_LOGIN, &session) {
+        let _ = store.save(fresh);
+    }
+
+    let snap = fetch_work(store);
+    if snap.state != "NeedLogin" {
+        return snap;
+    }
+    let refreshed = browser_login::refresh_headless(&FLEX_LOGIN)
+        .ok()
+        .is_some_and(|fresh| store.save(fresh).is_ok());
+    if refreshed {
+        return fetch_work(store);
+    }
+    need_login(format!(
+        "{} — {LOGIN_HINT}",
+        snap.error.unwrap_or_else(|| "인증이 만료됐습니다".into())
+    ))
 }
 
 fn urlencoding_loose(s: &str) -> String {
@@ -639,6 +730,45 @@ mod tests {
             snap.error
         );
         assert!(snap.worked_seconds.unwrap_or(0) > 0);
+    }
+
+    fn cookie(name: &str, value: &str) -> Cookie {
+        serde_json::from_value(serde_json::json!({
+            "name": name, "value": value, "domain": "flex.team"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn cookie_header_sends_present_auth_cookies_only() {
+        let cookies = vec![cookie("_ga", "x"), cookie("V2_WS_AID", "w"), cookie("AID", "a")];
+        assert_eq!(cookie_header(&cookies), "AID=a; V2_WS_AID=w");
+        assert_eq!(flex_aid(&cookies), Some("a"));
+        assert_eq!(flex_aid(&[cookie("V2_WS_AID", "w")]), Some("w"));
+        assert_eq!(flex_aid(&[cookie("AID", "")]), None);
+    }
+
+    #[test]
+    fn reads_current_user_from_workspace_users() {
+        let val = serde_json::json!({
+            "currentUser": {
+                "customer": { "customerIdHash": "c1", "name": "회사" },
+                "user": { "userIdHash": "u-current", "name": "이름", "displayName": "표시" }
+            },
+            "users": [{ "user": { "userIdHash": "u-other" } }]
+        });
+        assert_eq!(extract_user_id_hash(&val).as_deref(), Some("u-current"));
+        assert_eq!(account_label(&val).as_deref(), Some("표시 · 회사"));
+    }
+
+    /// 실측: 전용 프로필에 로그인이 남아 있어야 한다. headless Chrome을 띄운다.
+    /// `cargo test -- --ignored live_` (출력에 쿠키 값·계정 정보를 남기지 않는다)
+    #[test]
+    #[ignore]
+    fn live_refresh_headless_validates() {
+        let session = browser_login::refresh_headless(&FLEX_LOGIN).expect("refresh");
+        assert!(flex_aid(&session.cookies).is_some());
+        assert!(session.account.and_then(|a| a.user_id).is_some());
     }
 
     #[test]

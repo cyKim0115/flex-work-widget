@@ -147,7 +147,7 @@ function render(snap: WorkSnapshot) {
   const now = new Date();
   const hhmm = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   if (snap.state === "NeedLogin") {
-    status.textContent = "우클릭 → 설정에서 연결";
+    status.textContent = "우클릭 → 설정 → 브라우저로 로그인";
   } else if (snap.state === "FetchError") {
     status.textContent = `갱신 실패 · ${hhmm}`;
   } else {

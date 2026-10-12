@@ -27,11 +27,5 @@ export function phaseLabel(state: WorkPhase): string {
 }
 
 export function tidyMessage(raw: string): string {
-  return raw
-    .replace(/\r\n/g, "\n")
-    .replace(/\nLocation:\s*\n\s*rookie-rs[\s\S]*$/gim, "")
-    .replace(/chrome:\s*decrypt_encrypted_value failed/gi, "Chrome 쿠키 복호화 실패")
-    .replace(/edge:\s*decrypt_encrypted_value failed/gi, "Edge 쿠키 복호화 실패")
-    .replace(/can be decrypted only when running as admin[^\n]*/gi, "관리자 권한(UAC) 필요")
-    .trim();
+  return raw.replace(/\r\n/g, "\n").trim();
 }

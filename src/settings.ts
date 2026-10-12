@@ -89,103 +89,55 @@ async function pushWorkToMain(snap: WorkSnapshot) {
   await emit("work-updated", snap);
 }
 
-type HarvestCandidate = {
-  id: string;
-  browser: string;
-  profile: string;
-  account: string;
-  isLastUsed: boolean;
+/// 백엔드 LoginInfo. 쿠키 값은 오지 않는다.
+type LoginInfo = {
+  connected: boolean;
+  account: string | null;
+  savedAtMs: number | null;
+  expiresAtMs: number | null;
+  hasProfile: boolean;
+  browserFound: boolean;
 };
 
-function browserLabel(browser: string): string {
-  switch (browser) {
-    case "chrome":
-      return "Chrome";
-    case "edge":
-      return "Edge";
-    case "brave":
-      return "Brave";
-    case "chromium":
-      return "Chromium";
-    default:
-      return browser;
-  }
+function formatDateTime(ms: number): string {
+  return new Date(ms).toLocaleString([], {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
-async function loadCandidates(): Promise<HarvestCandidate[]> {
-  try {
-    return await invoke<HarvestCandidate[]>("list_harvest_candidates");
-  } catch {
-    return [];
-  }
-}
-
-async function loadCurrentSource(): Promise<string | null> {
-  try {
-    return await invoke<string | null>("current_harvest_source");
-  } catch {
-    return null;
-  }
-}
-
-/// Show the browser/profile chooser only when a harvest has detected sessions.
-async function renderProfilePicker() {
-  const wrap = $("profile-picker-wrap");
-  const select = $("profile-select") as HTMLSelectElement;
-  const [candidates, current] = await Promise.all([loadCandidates(), loadCurrentSource()]);
-
-  // Only worth choosing when flex is logged into more than one profile.
-  if (candidates.length <= 1) {
-    wrap.classList.add("hidden");
+/// 연결됨 · 계정 · 저장 시각 · 만료 예상
+async function renderLoginInfo() {
+  const info = await invoke<LoginInfo>("get_login_info");
+  const el = $("login-detail");
+  if (!info.browserFound) {
+    el.textContent = "Chrome 또는 Edge를 찾지 못했습니다. 설치 후 다시 시도하세요.";
     return;
   }
-
-  wrap.classList.remove("hidden");
-  select.replaceChildren();
-
-  const auto = document.createElement("option");
-  auto.value = "";
-  auto.textContent = "자동 (최근 사용 브라우저)";
-  select.append(auto);
-
-  let matched = false;
-  for (const cand of candidates) {
-    const opt = document.createElement("option");
-    opt.value = cand.id;
-    const usedNote = cand.isLastUsed ? " · 최근 사용" : "";
-    opt.textContent = `${browserLabel(cand.browser)} · ${cand.account}${usedNote}`;
-    if (current && cand.id === current) {
-      opt.selected = true;
-      matched = true;
-    }
-    select.append(opt);
+  if (!info.connected) {
+    el.textContent = info.hasProfile
+      ? "연결 안 됨 · 전용 프로필에 로그인이 남아 있으면 버튼 한 번으로 다시 연결됩니다."
+      : "연결 안 됨";
+    return;
   }
-  if (!matched) auto.selected = true;
+  const parts = ["연결됨"];
+  if (info.account) parts.push(info.account);
+  if (info.savedAtMs) parts.push(`저장 ${formatDateTime(info.savedAtMs)}`);
+  if (info.expiresAtMs) parts.push(`만료 예상 ${formatDateTime(info.expiresAtMs)}`);
+  el.textContent = parts.join(" · ");
 }
 
-async function onProfileChange(id: string) {
-  clearActionStatus();
-  const select = $("profile-select") as HTMLSelectElement;
-  select.disabled = true;
-  setActionStatus(
-    id
-      ? "선택한 프로필로 다시 가져오는 중… UAC 창이 뜨면 허용해주세요."
-      : "자동으로 다시 가져오는 중… UAC 창이 뜨면 허용해주세요.",
-  );
-  try {
-    const snap = await invoke<WorkSnapshot>("set_harvest_preference", { id });
-    renderConnection(snap);
-    await pushWorkToMain(snap);
-    await renderProfilePicker();
-    if (snap.state === "NeedLogin" || snap.state === "FetchError") {
-      setActionStatus(tidyMessage(snap.error || snap.label || "세션 가져오기 실패"), "error");
-    } else {
-      setActionStatus("선택한 프로필로 세션을 다시 가져왔습니다.", "ok");
-    }
-  } catch (e) {
-    setActionStatus(tidyMessage(String(e)), "error");
-  } finally {
-    select.disabled = false;
+async function afterSessionChange(snap: WorkSnapshot) {
+  renderConnection(snap);
+  await pushWorkToMain(snap);
+  await renderLoginInfo().catch(() => {});
+}
+
+function setConnectionButtonsDisabled(disabled: boolean) {
+  for (const id of ["btn-login", "btn-disconnect", "btn-reset-profile"]) {
+    ($(id) as HTMLButtonElement).disabled = disabled;
   }
 }
 
@@ -348,7 +300,7 @@ const REFRESH_STEPS: { name: string; run: () => Promise<unknown> }[] = [
   { name: "항상 위 표시", run: renderAlwaysOnTop },
   { name: "시작프로그램", run: refreshAutostart },
   { name: "연결 상태", run: refreshConnection },
-  { name: "프로필 목록", run: renderProfilePicker },
+  { name: "로그인 정보", run: renderLoginInfo },
 ];
 
 async function refreshView() {
@@ -379,37 +331,54 @@ async function closeWindow() {
 
 async function onLogin() {
   clearActionStatus();
+  setActionStatus("전용 Chrome 창을 여는 중…");
+  setConnectionButtonsDisabled(true);
   try {
-    await invoke("open_login_system");
-    setActionStatus("브라우저에서 flex.team 로그인을 완료한 뒤 세션 가져오기를 눌러주세요.");
+    const snap = await invoke<WorkSnapshot>("login_with_browser");
+    await afterSessionChange(snap);
+    if (snap.state === "NeedLogin" || snap.state === "FetchError") {
+      setActionStatus(tidyMessage(snap.error || snap.label || "로그인 확인 실패"), "error");
+    } else {
+      setActionStatus("로그인했습니다. 위젯에 근무시간이 반영됩니다.", "ok");
+    }
+  } catch (e) {
+    setActionStatus(tidyMessage(String(e)), "error");
+  } finally {
+    setConnectionButtonsDisabled(false);
+  }
+}
+
+async function onDisconnect() {
+  clearActionStatus();
+  try {
+    await afterSessionChange(await invoke<WorkSnapshot>("disconnect_session"));
+    setActionStatus("연결을 해제했습니다. 다시 쓰려면 브라우저로 로그인하세요.", "ok");
   } catch (e) {
     setActionStatus(tidyMessage(String(e)), "error");
   }
 }
 
-async function onHarvest() {
+/// 프로필까지 지우는 동작이라 한 번 더 눌러야 실행한다.
+let resetArmedUntil = 0;
+
+async function onResetProfile() {
+  const btn = $("btn-reset-profile") as HTMLButtonElement;
+  if (Date.now() > resetArmedUntil) {
+    resetArmedUntil = Date.now() + 4000;
+    btn.textContent = "한 번 더 누르면 초기화";
+    window.setTimeout(() => {
+      btn.textContent = "로그인 프로필 초기화";
+    }, 4000);
+    return;
+  }
+  resetArmedUntil = 0;
+  btn.textContent = "로그인 프로필 초기화";
   clearActionStatus();
-  setActionStatus("세션 가져오기 중… UAC 창이 뜨면 허용해주세요.");
-  const btn = $("btn-harvest") as HTMLButtonElement;
-  btn.disabled = true;
   try {
-    const snap = await invoke<WorkSnapshot>("harvest_browser_session");
-    renderConnection(snap);
-    await pushWorkToMain(snap);
-    await renderProfilePicker();
-    if (snap.state === "NeedLogin" || snap.state === "FetchError") {
-      setActionStatus(
-        tidyMessage(snap.error || snap.label || "세션 가져오기 실패") +
-          "\n\nEdge에서 flex.team에 로그인한 뒤 다시 시도하세요.",
-        "error",
-      );
-    } else {
-      setActionStatus("세션을 가져왔습니다. 위젯에 근무시간이 반영됩니다.", "ok");
-    }
+    await afterSessionChange(await invoke<WorkSnapshot>("reset_login_profile"));
+    setActionStatus("로그인 프로필을 초기화했습니다. 다음 로그인은 처음부터 합니다.", "ok");
   } catch (e) {
     setActionStatus(tidyMessage(String(e)), "error");
-  } finally {
-    btn.disabled = false;
   }
 }
 
@@ -443,19 +412,20 @@ async function boot() {
   try {
     await refreshView();
 
-    $("profile-select").addEventListener("change", (event) => {
-      const value = (event.target as HTMLSelectElement).value;
-      void onProfileChange(value);
-    });
-
     $("btn-close").addEventListener("click", () => {
       void closeWindow();
     });
     $("btn-login").addEventListener("click", () => {
       void onLogin();
     });
-    $("btn-harvest").addEventListener("click", () => {
-      void onHarvest();
+    $("btn-disconnect").addEventListener("click", () => {
+      void onDisconnect();
+    });
+    $("btn-reset-profile").addEventListener("click", () => {
+      void onResetProfile();
+    });
+    await listen<string>("login-progress", (event) => {
+      setActionStatus(event.payload);
     });
     $("btn-refresh").addEventListener("click", () => {
       void onRefresh();

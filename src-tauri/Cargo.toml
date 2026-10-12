@@ -24,3 +24,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 url = "2"
 open = "5"
 tauri-plugin-window-state = "2"
+# 전용 프로필 Chrome의 CDP(ws://127.0.0.1)만 쓰므로 TLS 기능은 켜지 않는다.
+tungstenite = "0.30"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
