@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import {
   applyTheme,
   loadPreferences,
@@ -9,6 +10,11 @@ import {
   type ThemeMode,
 } from "./preferences";
 import { phaseLabel, tidyMessage, type WorkPhase, type WorkSnapshot } from "./work-types";
+
+/// 제목 표시줄과 화면 위아래 여유. 이만큼 빼야 창 아래 끝이 작업 표시줄에 걸리지 않는다.
+const SCREEN_MARGIN = 80;
+/// tauri.conf.json 의 minHeight 와 같다.
+const MIN_HEIGHT = 520;
 
 let prefs: Preferences = loadPreferences();
 let autostartEnabled = false;
@@ -32,12 +38,58 @@ function showBootError(message: string) {
   });
 }
 
+function contentHeight(): number {
+  const el = document.querySelector(".settings-window");
+  return el ? Math.ceil(el.getBoundingClientRect().height) : 0;
+}
+
+/// 화면에 들어가는 만큼만 내용 높이에 창을 맞추고 가운데로 옮긴다. 내용이 더 길면
+/// 스크롤로 넘기고 닫기 버튼은 아래에 붙어 있다. 고정 높이로 두면 FHD처럼 세로가
+/// 짧은 화면에서 창 아래가 화면 밖으로 나가, 늘리지도 닫지도 못하게 된다.
+async function fitToScreen() {
+  try {
+    const win = getCurrentWindow();
+    const inner = (await win.innerSize()).toLogical(await win.scaleFactor());
+    const maxHeight = Math.max(MIN_HEIGHT, window.screen.availHeight - SCREEN_MARGIN);
+    const target = Math.max(MIN_HEIGHT, Math.min(contentHeight(), maxHeight));
+    if (Math.abs(target - inner.height) > 1) {
+      await win.setSize(new LogicalSize(inner.width, target));
+    }
+    await win.center();
+  } catch {
+    /* 크기 조절 실패는 스크롤로 버틴다 */
+  }
+}
+
+/// 위에 알림이 떠서 내용이 길어지면, 지금 자리에서 화면 아래 끝까지 남은 만큼만 늘린다.
+/// 사용자가 옮겨 둔 창을 움직이거나 줄이지는 않는다. 모자라는 만큼은 스크롤이다.
+async function growToContent() {
+  try {
+    const win = getCurrentWindow();
+    const scale = await win.scaleFactor();
+    const inner = (await win.innerSize()).toLogical(scale);
+    const needed = contentHeight();
+    if (needed <= inner.height + 1) return;
+
+    const top = (await win.innerPosition()).toLogical(scale).y;
+    const availTop = (window.screen as Screen & { availTop?: number }).availTop ?? 0;
+    const room = Math.floor(availTop + window.screen.availHeight - top - 8);
+    const target = Math.min(needed, room);
+    if (target > inner.height + 1) {
+      await win.setSize(new LogicalSize(inner.width, target));
+    }
+  } catch {
+    /* 크기 조절 실패는 스크롤로 버틴다 */
+  }
+}
+
 function setActionStatus(message: string, tone: "info" | "ok" | "error" = "info") {
   const el = $("action-status");
   el.textContent = message;
   el.classList.remove("hidden", "settings-status--ok", "settings-status--error");
   if (tone === "ok") el.classList.add("settings-status--ok");
   else if (tone === "error") el.classList.add("settings-status--error");
+  void growToContent();
 }
 
 function clearActionStatus() {
@@ -309,8 +361,17 @@ async function refreshView() {
   applyTheme(prefs.theme);
   renderDisplayMode();
   renderTheme();
+  // 지난번에 그려 둔 내용으로 먼저 맞춘다. 값을 다시 읽은 뒤에 맞추면 창이 뜬 뒤
+  // 크기가 튀는 시간이 길어진다.
+  await fitToScreen();
 
   const results = await Promise.allSettled(REFRESH_STEPS.map((step) => step.run()));
+  // 숨겨져 있으면(앱 시작 직후) 다음에 열릴 크기를 맞춰 두고, 떠 있으면 로그인 정보
+  // 줄 등이 늘어난 만큼만 키운다.
+  const visible = await getCurrentWindow()
+    .isVisible()
+    .catch(() => true);
+  void (visible ? growToContent() : fitToScreen());
 
   // 실패를 삼키지 않는다. 콘솔에는 원인을, 상태줄에는 어느 단계인지 남긴다.
   const failed: string[] = [];
