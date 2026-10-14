@@ -1,6 +1,7 @@
 mod browser_login;
 mod install;
 mod secure_store;
+mod tray;
 mod work;
 
 use std::path::PathBuf;
@@ -256,6 +257,7 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            tray::install(app)?;
             cleanup_stale_debug_autostart();
             // Release builds keep a stable copy under LOCALAPPDATA for shortcuts/autostart.
             let _ = ensure_installed_release();
