@@ -126,11 +126,13 @@ function renderConnection(snap: WorkSnapshot) {
     detail.textContent = snap.error || snap.label || "갱신에 실패했습니다.";
     return;
   }
-  if (snap.startedAt) {
-    detail.textContent = `${snap.label || "연결됨"} · 출근 ${snap.startedAt}`;
-    return;
-  }
-  detail.textContent = snap.label || "연결됨";
+  // work.rs 는 Working/Resting 라벨을 "오늘 누적 · 출근 09:43" 처럼 출근 시각까지
+  // 붙여서 준다. 여기서 또 붙이면 "· 출근 09:43 · 출근 09:43" 이 된다.
+  // 반대로 Done 라벨은 "오늘 누적 근무시간" 이라 출근 시각이 없다 — 그건 붙여줘야 한다.
+  const base = snap.label || "연결됨";
+  const startedAt = snap.startedAt;
+  detail.textContent =
+    startedAt && !base.includes(`출근 ${startedAt}`) ? `${base} · 출근 ${startedAt}` : base;
 }
 
 async function fetchWork(): Promise<WorkSnapshot> {
