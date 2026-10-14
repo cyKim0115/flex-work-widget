@@ -21,3 +21,5 @@ Thumbs.db
 .env
 .env.*
 scripts/__pycache__/
+# Claude Code worktrees (separate checkouts)
+.claude/worktrees/
