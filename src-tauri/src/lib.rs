@@ -1,8 +1,36 @@
 mod browser_login;
+#[cfg(windows)]
+mod glass;
 mod install;
 mod secure_store;
 mod tray;
 mod work;
+
+/// 배경 흐림은 Windows 전용이다(glass.rs). 다른 OS에서는 늘 꺼진 채로 둔다.
+#[cfg(not(windows))]
+mod glass {
+    use tauri::http::{Request, Response};
+    use tauri::WebviewWindow;
+
+    pub const MAX_BLUR_PX: f64 = 32.0;
+    pub const DEFAULT_BLUR_PX: f64 = 12.0;
+
+    pub fn supported() -> bool {
+        false
+    }
+
+    pub fn apply(_window: &WebviewWindow, _enabled: bool) -> bool {
+        false
+    }
+
+    pub fn set_blur(_px: f64) {}
+
+    pub fn wake() {}
+
+    pub fn frame_response(_webview_label: &str, _request: Request<Vec<u8>>) -> Response<Vec<u8>> {
+        Response::builder().status(403).body(Vec::new()).unwrap()
+    }
+}
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -55,24 +83,41 @@ fn close_settings_window(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn always_on_top_pref_path() -> PathBuf {
+fn ui_pref_path() -> PathBuf {
     session_dir().join("ui-pref.json")
+}
+
+/// 항상 위 표시와 배경 흐림 설정을 함께 담는다. 없거나 깨졌으면 빈 값(모두 기본값)이다.
+fn load_ui_pref() -> serde_json::Map<String, serde_json::Value> {
+    std::fs::read_to_string(ui_pref_path())
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// 한 키만 바꿔 쓴다. 통째로 덮으면 다른 설정이 지워진다. 값이 같으면 쓰지 않는다
+/// (위젯 부팅이 저장값을 그대로 다시 넘기고, 흐림 반경 슬라이더는 움직이는 동안 계속 부른다).
+fn save_ui_pref(key: &str, value: serde_json::Value) -> Result<(), String> {
+    let mut pref = load_ui_pref();
+    if pref.get(key) == Some(&value) {
+        return Ok(());
+    }
+    pref.insert(key.to_string(), value);
+    let text = serde_json::to_string_pretty(&pref).map_err(|e| e.to_string())?;
+    std::fs::write(ui_pref_path(), text).map_err(|e| e.to_string())
 }
 
 /// Backend owns this native window flag so the two webviews can't disagree and
 /// the tauri.conf default can't re-force it on. Shipped on → default true.
 fn load_always_on_top_pref() -> bool {
-    std::fs::read_to_string(always_on_top_pref_path())
-        .ok()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-        .and_then(|v| v.get("alwaysOnTop").and_then(|b| b.as_bool()))
+    load_ui_pref()
+        .get("alwaysOnTop")
+        .and_then(|b| b.as_bool())
         .unwrap_or(true)
 }
 
 fn save_always_on_top_pref(enabled: bool) -> Result<(), String> {
-    let json = serde_json::json!({ "alwaysOnTop": enabled });
-    let text = serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?;
-    std::fs::write(always_on_top_pref_path(), text).map_err(|e| e.to_string())
+    save_ui_pref("alwaysOnTop", serde_json::json!(enabled))
 }
 
 /// Apply to the main window AND persist, so the choice survives restarts.
@@ -89,6 +134,57 @@ fn set_always_on_top(app: AppHandle, enabled: bool) -> Result<(), String> {
 #[tauri::command]
 fn get_always_on_top() -> bool {
     load_always_on_top_pref()
+}
+
+/// 배경 흐림 저장값. 항상 위 표시처럼 백엔드(ui-pref.json)가 가진다.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GlassPref {
+    enabled: bool,
+    blur: f64,
+}
+
+/// 저장값이 없으면 켬·12px. 지원하지 않는 Windows에서는 glass::apply가 알아서 끈다.
+#[tauri::command]
+fn get_glass_pref() -> GlassPref {
+    let pref = load_ui_pref();
+    GlassPref {
+        enabled: pref.get("glass").and_then(|b| b.as_bool()).unwrap_or(true),
+        blur: pref
+            .get("glassBlur")
+            .and_then(|px| px.as_f64())
+            .map_or(glass::DEFAULT_BLUR_PX, |px| px.clamp(0.0, glass::MAX_BLUR_PX)),
+    }
+}
+
+/// 저장하고 위젯 창에 반영한다. 위젯 부팅과 설정 창이 함께 쓴다.
+/// 실제로 켜졌는지 돌려주고 위젯 창에도 알려, 카드 투명도를 효과 상태에 맞춘다.
+#[tauri::command]
+fn set_glass(app: AppHandle, enabled: bool) -> Result<bool, String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    save_ui_pref("glass", serde_json::json!(enabled))?;
+    let applied = glass::apply(&window, enabled);
+    window
+        .emit("glass-applied", applied)
+        .map_err(|e| e.to_string())?;
+    Ok(applied)
+}
+
+/// 흐림 반경(CSS px). 저장하고 캡처 여백을 맞춘 뒤, 위젯 창이 CSS blur 반경을 바꾸도록 알린다.
+#[tauri::command]
+fn set_glass_blur(app: AppHandle, px: f64) -> Result<(), String> {
+    let px = px.clamp(0.0, glass::MAX_BLUR_PX);
+    save_ui_pref("glassBlur", serde_json::json!(px))?;
+    glass::set_blur(px);
+    app.emit_to("main", "glass-blur", px)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn glass_supported() -> bool {
+    glass::supported()
 }
 
 #[tauri::command]
@@ -227,6 +323,10 @@ pub fn run() {
                 .with_denylist(&[SETTINGS_LABEL])
                 .build(),
         )
+        // 배경 흐림 캡처 프레임. 위젯 페이지가 http://glassbg.localhost/frame 으로 받아 간다.
+        .register_uri_scheme_protocol("glassbg", |ctx, request| {
+            glass::frame_response(ctx.webview_label(), request)
+        })
         .manage(store)
         .invoke_handler(tauri::generate_handler![
             get_work,
@@ -245,9 +345,21 @@ pub fn run() {
             disconnect_session,
             reset_login_profile,
             set_always_on_top,
-            get_always_on_top
+            get_always_on_top,
+            get_glass_pref,
+            set_glass,
+            set_glass_blur,
+            glass_supported
         ])
         .on_window_event(|window, event| {
+            if window.label() == "main" {
+                // 배경 흐림은 창 뒤를 캡처하므로, 옮기거나 크기가 바뀌면(메시지 표시 때
+                // COMPACT ↔ MESSAGE 포함) 바로 다시 찍는다.
+                if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_)) {
+                    glass::wake();
+                }
+                return;
+            }
             if window.label() != SETTINGS_LABEL {
                 return;
             }

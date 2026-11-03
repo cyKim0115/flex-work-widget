@@ -2,10 +2,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import {
+  applyGlass,
+  applyGlassBlur,
   applyTheme,
+  loadGlassPref,
   loadPreferences,
   savePreferences,
   type DisplayMode,
+  type GlassPref,
   type Preferences,
   type ThemeMode,
 } from "./preferences";
@@ -19,6 +23,8 @@ const MIN_HEIGHT = 520;
 let prefs: Preferences = loadPreferences();
 let autostartEnabled = false;
 let isDevBuild = false;
+let glassSupported = true;
+let glassPref: GlassPref = { enabled: true, blur: 12 };
 
 function $(id: string): HTMLElement {
   const el = document.getElementById(id);
@@ -284,6 +290,28 @@ async function renderAlwaysOnTop() {
   }
 }
 
+/// 배경 흐림은 캡처에서 위젯을 빼는 기능(Windows 10 2004 이상)이 있어야 한다.
+/// 저장값은 그대로 두고 토글만 막아, 지원하는 PC에서는 같은 설정이 살아 있게 한다.
+async function renderGlass() {
+  const toggle = $("glass-toggle") as HTMLInputElement;
+  glassSupported = await invoke<boolean>("glass_supported").catch(() => false);
+  glassPref = await loadGlassPref();
+  toggle.disabled = !glassSupported;
+  toggle.checked = glassSupported && glassPref.enabled;
+  $("glass-hint").textContent = glassSupported
+    ? "위젯 뒤 화면을 흐리게 비춥니다."
+    : "이 Windows에서는 쓸 수 없습니다. Windows 10 2004 이상에서 동작합니다.";
+  renderGlassBlur();
+}
+
+/// 반경 슬라이더는 배경 흐림이 켜져 있을 때만 쓴다.
+function renderGlassBlur() {
+  const slider = $("glass-blur") as HTMLInputElement;
+  slider.value = String(glassPref.blur);
+  slider.disabled = !(glassSupported && glassPref.enabled);
+  $("glass-blur-value").textContent = `${glassPref.blur}px`;
+}
+
 async function setTheme(theme: ThemeMode) {
   prefs = { ...prefs, theme };
   savePreferences(prefs);
@@ -352,6 +380,7 @@ async function refreshAutostart() {
 /// 뒷단이 통째로 건너뛰어져 UI 가 옛 상태로 남는다.
 const REFRESH_STEPS: { name: string; run: () => Promise<unknown> }[] = [
   { name: "항상 위 표시", run: renderAlwaysOnTop },
+  { name: "배경 흐림", run: renderGlass },
   { name: "시작프로그램", run: refreshAutostart },
   { name: "연결 상태", run: refreshConnection },
   { name: "로그인 정보", run: renderLoginInfo },
@@ -505,6 +534,37 @@ async function boot() {
         setActionStatus(enabled ? "위젯을 항상 위에 표시합니다." : "위젯을 일반 창처럼 표시합니다.", "ok");
       } catch (e) {
         alwaysOnTopToggle.checked = prefs.alwaysOnTop;
+        setActionStatus(tidyMessage(String(e)), "error");
+      }
+    });
+
+    const glassToggle = $("glass-toggle") as HTMLInputElement;
+    glassToggle.addEventListener("change", async () => {
+      if (!glassSupported) return;
+      const enabled = glassToggle.checked;
+      try {
+        const applied = await applyGlass(enabled);
+        glassPref = { ...glassPref, enabled };
+        setActionStatus(
+          applied ? "위젯 배경을 흐리게 비춥니다." : "위젯 배경 흐림을 껐습니다.",
+          "ok",
+        );
+      } catch (e) {
+        glassToggle.checked = glassPref.enabled;
+        setActionStatus(tidyMessage(String(e)), "error");
+      }
+      renderGlassBlur();
+    });
+
+    // 슬라이더를 움직이는 동안에도 바로 보이도록 input마다 위젯에 반영한다.
+    const glassBlur = $("glass-blur") as HTMLInputElement;
+    glassBlur.addEventListener("input", async () => {
+      const px = Number(glassBlur.value);
+      glassPref = { ...glassPref, blur: px };
+      $("glass-blur-value").textContent = `${px}px`;
+      try {
+        await applyGlassBlur(px);
+      } catch (e) {
         setActionStatus(tidyMessage(String(e)), "error");
       }
     });
