@@ -1,6 +1,3 @@
-[submodule ".cursor/system-crew"]
-	path = .cursor/system-crew
-	url = https://github.com/cyKim0115/system-crew.git
 [submodule ".cursor/git-workflow"]
 	path = .cursor/git-workflow
 	url = https://github.com/cyKim0115/git-workflow.git
