@@ -500,6 +500,30 @@ async function onOpenFlex() {
   }
 }
 
+/// 머리 줄 — OS 제목 표시줄 대신이다(tauri.conf.json decorations: false). 닫기 X·Esc는
+/// 부팅 전에 걸어 두어 뒤 단계가 실패해도 닫을 수 있게 한다. 끌기는 data-tauri-drag-region 대신
+/// 직접 처리한다. 그 속성은 두 번 누르면 창을 최대화해 설정 창에 맞지 않고, 붙인 요소를
+/// 직접 누를 때만 끌려서 제목·배지 위를 따로 챙겨야 한다(Frond titlebar.ts와 같은 방식).
+function initTitlebar() {
+  $("btn-titlebar-close").addEventListener("click", () => {
+    void closeWindow();
+  });
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") void closeWindow();
+  });
+  document.querySelector(".settings-titlebar")?.addEventListener("mousedown", (event) => {
+    const e = event as MouseEvent;
+    if (e.button !== 0 || e.detail > 1) return;
+    if ((e.target as Element).closest("button, a, input, select")) return;
+    e.preventDefault();
+    try {
+      void getCurrentWindow().startDragging();
+    } catch {
+      /* 브라우저 미리보기 */
+    }
+  });
+}
+
 async function boot() {
   try {
     await refreshView();
@@ -596,13 +620,10 @@ async function boot() {
     await listen("settings-open", () => {
       void refreshView();
     });
-
-    window.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") void closeWindow();
-    });
   } catch (e) {
     showBootError(String(e));
   }
 }
 
+initTitlebar();
 void boot();

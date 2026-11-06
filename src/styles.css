@@ -430,30 +430,88 @@ html.glass .glass-backdrop {
 
 /* Standalone settings window
    html은 overflow: hidden 그대로라, body를 창 높이에 고정해 body가 스크롤하게 둔다.
-   min-height로 두면 body가 내용만큼 늘어나 스크롤할 곳이 없고 아래가 잘린다. */
+   min-height로 두면 body가 내용만큼 늘어나 스크롤할 곳이 없고 아래가 잘린다.
+   설정 창은 테마와 상관없이 늘 어둡다. 바탕색은 머리 줄도 같이 쓰도록 변수로 둔다. */
 .settings-window-body {
+  --settings-bg: #16181c;
   height: 100vh;
   overflow-y: auto;
-  background: #16181c;
+  background: var(--settings-bg);
   color: #e8eaed;
 }
 
-/* 아래 패딩은 닫기 버튼 줄(sticky)이 대신 가진다. 여기 두면 끝까지 내려도
-   버튼 아래로 빈 띠가 남는다. */
+/* 위 여백은 머리 줄(높이 44px)이 대신 가진다. 아래 패딩은 닫기 버튼 줄(sticky)이
+   대신 가진다. 여기 두면 끝까지 내려도 버튼 아래로 빈 띠가 남는다. */
 .settings-window {
   max-width: 520px;
   margin: 0 auto;
-  padding: 20px 22px 0;
+  padding: 0 22px;
   display: flex;
   flex-direction: column;
   gap: 14px;
 }
 
-.settings-header-row {
+/* 머리 줄 — 설정 창은 OS 제목 표시줄 없이(decorations: false) 뜬다. Frond 설정 팝업처럼
+   같은 바탕 위에 작은 제목·상태 배지·닫기만 둔다. 줄의 빈 곳을 끌면 창이 움직이고
+   (settings.ts), body가 스크롤해도 위에 붙어 있어 언제든 끌고 닫을 수 있다.
+   좌우는 .settings-window 패딩만큼 넓혀 끌 곳이 창 끝까지 닿게 한다.
+   글자 선택은 전역 `* { user-select: none }`이 이미 막는다. */
+.settings-titlebar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
+  height: 44px;
+  margin: 0 -22px;
+  padding: 0 10px 0 22px;
+  background: var(--settings-bg);
+  cursor: default;
+}
+
+.settings-titlebar h1 {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.titlebar-close {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #9aa0a6;
+  cursor: pointer;
+}
+
+.titlebar-close svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+
+.titlebar-close:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #e8eaed;
+}
+
+.titlebar-close:focus-visible {
+  outline: 2px solid #2dd4bf;
+  outline-offset: -2px;
 }
 
 .settings-badge {
@@ -487,10 +545,10 @@ html.glass .glass-backdrop {
 }
 
 /* 버튼이 창 가운데·아래쪽에 있어서, 스크롤을 내린 채 누르면 위에 뜬 결과가 안 보인다.
-   위에 붙여 두고, 아래 내용이 비치지 않게 배경을 불투명하게 섞어 둔다. */
+   머리 줄(44px) 바로 아래에 붙여 두고, 아래 내용이 비치지 않게 배경을 불투명하게 섞어 둔다. */
 .settings-status {
   position: sticky;
-  top: 8px;
+  top: 52px;
   z-index: 2;
   margin: 0;
   padding: 10px 12px;
@@ -603,19 +661,6 @@ html.glass .glass-backdrop {
 .btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
-}
-
-.settings-header h1 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 700;
-}
-
-.settings-subtitle {
-  margin: 6px 0 0;
-  font-size: 12px;
-  color: #9aa0a6;
-  line-height: 1.45;
 }
 
 .settings-section {
