@@ -440,12 +440,11 @@ html.glass .glass-backdrop {
   color: #e8eaed;
 }
 
-/* 위 여백은 머리 줄(높이 44px)이 대신 가진다. 아래 패딩은 닫기 버튼 줄(sticky)이
-   대신 가진다. 여기 두면 끝까지 내려도 버튼 아래로 빈 띠가 남는다. */
+/* 위 여백은 머리 줄(높이 44px)이 대신 가진다. */
 .settings-window {
   max-width: 520px;
   margin: 0 auto;
-  padding: 0 22px;
+  padding: 0 22px 18px;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -752,14 +751,14 @@ html.glass .glass-backdrop {
   opacity: 0.5;
 }
 
-/* 창이 화면보다 짧아도 닫기는 늘 보이게 아래에 붙여 둔다. 위쪽은 흐리게 섞어
-   스크롤된 내용 위에 떠 있는 것이 드러나게 한다. */
-.settings-footer--window {
-  position: sticky;
-  bottom: 0;
-  z-index: 2;
-  padding: 12px 0 18px;
-  background: linear-gradient(to bottom, rgba(22, 24, 28, 0), #16181c 14px);
+/* 저장 버튼이 없다는 안내 한 줄(Frond 설정 팝업 아래 줄과 같은 문구). 닫기는 머리 줄의 X·Esc.
+   색은 설정 창의 다른 안내 글(.settings-hint)과 같은 흐린 색이다. */
+.settings-note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #9aa0a6;
+  text-align: center;
 }
 
 .btn {

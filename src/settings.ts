@@ -50,7 +50,7 @@ function contentHeight(): number {
 }
 
 /// 화면에 들어가는 만큼만 내용 높이에 창을 맞추고 가운데로 옮긴다. 내용이 더 길면
-/// 스크롤로 넘기고 닫기 버튼은 아래에 붙어 있다. 고정 높이로 두면 FHD처럼 세로가
+/// 스크롤로 넘기고 닫기 X는 위 머리 줄에 붙어 있다. 고정 높이로 두면 FHD처럼 세로가
 /// 짧은 화면에서 창 아래가 화면 밖으로 나가, 늘리지도 닫지도 못하게 된다.
 async function fitToScreen() {
   try {
@@ -528,9 +528,6 @@ async function boot() {
   try {
     await refreshView();
 
-    $("btn-close").addEventListener("click", () => {
-      void closeWindow();
-    });
     $("btn-login").addEventListener("click", () => {
       void onLogin();
     });
